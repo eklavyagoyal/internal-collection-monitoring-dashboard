@@ -1,0 +1,15 @@
+assets/external/
+*.db
+.states/
+.web/
+*.py[cod]
+__pycache__/
+*.pyc
+node_modules/
+credentials.json
+token.json
+.env
+*.egg-info/
+dist/
+build/
+.DS_Store

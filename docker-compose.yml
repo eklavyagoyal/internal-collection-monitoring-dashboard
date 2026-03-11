@@ -1,0 +1,32 @@
+services:
+  # ----- Reflex application -----
+  app:
+    build: .
+    ports:
+      - "3100:3000"
+      - "8100:8000"
+    env_file: .env
+    depends_on:
+      mongo:
+        condition: service_started
+      redis:
+        condition: service_started
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
+      - ./token.json:/app/token.json:ro
+    restart: unless-stopped
+
+  # ----- MongoDB -----
+  mongo:
+    image: mongo:7
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+  # ----- Redis (Reflex state sync) -----
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
