@@ -96,6 +96,9 @@ class NexusState(rx.State):
     form_name: str = ""
     form_description: str = ""
     form_booking_url: str = ""
+    form_notion_url: str = ""
+    form_linear_url: str = ""
+    form_deadline: str = ""
     form_goal: str = "100"
     form_calendar_id: str = "primary"
     form_calendar_filter: str = ""
@@ -187,6 +190,25 @@ class NexusState(rx.State):
     @rx.var(cache=True)
     def campaign_booking_url(self) -> str:
         return self.current_campaign.get("booking_url", "")
+
+    @rx.var(cache=True)
+    def campaign_notion_url(self) -> str:
+        return self.current_campaign.get("notion_url", "")
+
+    @rx.var(cache=True)
+    def campaign_linear_url(self) -> str:
+        return self.current_campaign.get("linear_url", "")
+
+    @rx.var(cache=True)
+    def campaign_deadline(self) -> str:
+        raw = self.current_campaign.get("deadline", "")
+        if not raw:
+            return ""
+        try:
+            dt = datetime.strptime(raw, "%Y-%m-%d")
+            return dt.strftime("%b %d, %Y")
+        except Exception:
+            return raw
 
     @rx.var(cache=True)
     def campaign_goal(self) -> int:
@@ -294,11 +316,9 @@ class NexusState(rx.State):
         d = self.selected_date
         today = datetime.now().date()
         if not d:
-            return datetime.now().strftime("%A, %B %d") + "  \u00b7  Today"
+            return datetime.now().strftime("%A, %B %d")
         try:
             dt = datetime.strptime(d, "%Y-%m-%d")
-            if dt.date() == today:
-                return dt.strftime("%A, %B %d") + "  \u00b7  Today"
             delta = (dt.date() - today).days
             suffix = ""
             if delta == -1:
@@ -834,10 +854,22 @@ class NexusState(rx.State):
     def set_form_calendar_filter(self, v: str):
         self.form_calendar_filter = v
 
+    def set_form_notion_url(self, v: str):
+        self.form_notion_url = v
+
+    def set_form_linear_url(self, v: str):
+        self.form_linear_url = v
+
+    def set_form_deadline(self, v: str):
+        self.form_deadline = v
+
     def clear_form(self):
         self.form_name = ""
         self.form_description = ""
         self.form_booking_url = ""
+        self.form_notion_url = ""
+        self.form_linear_url = ""
+        self.form_deadline = ""
         self.form_goal = "100"
         self.form_calendar_id = "primary"
         self.form_calendar_filter = ""
@@ -858,6 +890,9 @@ class NexusState(rx.State):
         self.form_name = campaign.get("name", "")
         self.form_description = campaign.get("description", "")
         self.form_booking_url = campaign.get("booking_url", "")
+        self.form_notion_url = campaign.get("notion_url", "")
+        self.form_linear_url = campaign.get("linear_url", "")
+        self.form_deadline = campaign.get("deadline", "")
         self.form_goal = str(campaign.get("goal", 100))
         self.form_calendar_id = campaign.get("calendar_id", "primary")
         self.form_calendar_filter = campaign.get("calendar_filter", "")
@@ -871,6 +906,9 @@ class NexusState(rx.State):
             "name": self.form_name.strip(),
             "description": self.form_description.strip(),
             "booking_url": self.form_booking_url.strip(),
+            "notion_url": self.form_notion_url.strip(),
+            "linear_url": self.form_linear_url.strip(),
+            "deadline": self.form_deadline.strip(),
             "goal": self.form_goal.strip() or "100",
             "calendar_id": self.form_calendar_id.strip() or "primary",
             "calendar_filter": self.form_calendar_filter.strip(),
@@ -889,6 +927,9 @@ class NexusState(rx.State):
             "name": self.form_name.strip(),
             "description": self.form_description.strip(),
             "booking_url": self.form_booking_url.strip(),
+            "notion_url": self.form_notion_url.strip(),
+            "linear_url": self.form_linear_url.strip(),
+            "deadline": self.form_deadline.strip(),
             "goal": self.form_goal.strip() or "100",
             "calendar_id": self.form_calendar_id.strip() or "primary",
             "calendar_filter": self.form_calendar_filter.strip(),

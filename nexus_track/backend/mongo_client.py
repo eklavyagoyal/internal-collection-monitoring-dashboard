@@ -126,6 +126,9 @@ async def create_campaign(data: dict) -> str:
         "name": data["name"],
         "description": data.get("description", ""),
         "booking_url": data.get("booking_url", ""),
+        "notion_url": data.get("notion_url", ""),
+        "linear_url": data.get("linear_url", ""),
+        "deadline": data.get("deadline", ""),
         "goal": goal,
         # calendar_ids is a list of {calendar_id, filter} objects
         "calendar_ids": data.get("calendar_ids", []),
@@ -145,6 +148,7 @@ async def update_campaign(campaign_id: str, data: dict) -> None:
     now = datetime.now(timezone.utc).isoformat()
     allowed = {
         "name", "description", "booking_url",
+        "notion_url", "linear_url", "deadline",
         "calendar_id", "calendar_filter", "calendar_ids", "status",
         "goal",
     }
@@ -171,6 +175,9 @@ async def get_all_campaigns() -> list[dict]:
         doc["_id"] = str(doc["_id"])
         # Backfill goal for old campaigns
         doc.setdefault("goal", 100)
+        doc.setdefault("notion_url", "")
+        doc.setdefault("linear_url", "")
+        doc.setdefault("deadline", "")
         out.append(doc)
     return out
 
@@ -180,6 +187,9 @@ async def get_campaign(campaign_id: str) -> dict | None:
     if doc:
         doc["_id"] = str(doc["_id"])
         doc.setdefault("goal", 100)
+        doc.setdefault("notion_url", "")
+        doc.setdefault("linear_url", "")
+        doc.setdefault("deadline", "")
     return doc
 
 

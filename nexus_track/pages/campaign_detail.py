@@ -118,7 +118,16 @@ def _date_navigator() -> rx.Component:
             cursor="pointer",
         ),
         rx.cond(
-            ~NexusState.is_today,
+            NexusState.is_today,
+            # On today: non-clickable purple "Today" badge
+            rx.badge(
+                "Today",
+                color_scheme="iris",
+                variant="solid",
+                size="1",
+                border_radius=RADIUS_SM,
+            ),
+            # On another day: clickable button to jump back
             rx.button(
                 "Today",
                 size="1",
@@ -296,6 +305,58 @@ def _campaign_header() -> rx.Component:
                     ),
                     href=NexusState.campaign_booking_url,
                     is_external=True,
+                ),
+            ),
+            rx.cond(
+                NexusState.campaign_notion_url != "",
+                rx.link(
+                    rx.hstack(
+                        rx.icon("book-open", size=12),
+                        rx.text("Notion", size="1"),
+                        spacing="1", color=SUBTEXT,
+                    ),
+                    href=NexusState.campaign_notion_url,
+                    is_external=True,
+                    padding_x="10px",
+                    padding_y="4px",
+                    border_radius=RADIUS_SM,
+                    background="rgba(255,255,255,0.05)",
+                    _hover={"background": "rgba(255,255,255,0.1)"},
+                ),
+            ),
+            rx.cond(
+                NexusState.campaign_linear_url != "",
+                rx.link(
+                    rx.hstack(
+                        rx.icon("layers", size=12),
+                        rx.text("Linear", size="1"),
+                        spacing="1", color=SUBTEXT,
+                    ),
+                    href=NexusState.campaign_linear_url,
+                    is_external=True,
+                    padding_x="10px",
+                    padding_y="4px",
+                    border_radius=RADIUS_SM,
+                    background="rgba(255,255,255,0.05)",
+                    _hover={"background": "rgba(255,255,255,0.1)"},
+                ),
+            ),
+            rx.cond(
+                NexusState.campaign_deadline != "",
+                rx.hstack(
+                    rx.icon("calendar-clock", size=12, color=AMBER),
+                    rx.text(
+                        "Due " + NexusState.campaign_deadline,
+                        size="1",
+                        color=AMBER,
+                        weight="medium",
+                    ),
+                    spacing="1",
+                    align="center",
+                    padding_x="10px",
+                    padding_y="4px",
+                    border_radius=RADIUS_SM,
+                    background=AMBER_SOFT,
                 ),
             ),
             spacing="3",

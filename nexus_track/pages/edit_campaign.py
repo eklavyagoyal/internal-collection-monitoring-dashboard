@@ -11,6 +11,7 @@ from ..components.design_tokens import (
     PAGE_PADDING_BOTTOM,
     PAGE_PADDING_X,
     RADIUS_MD,
+    RADIUS_SM,
     SUBTEXT,
     TEXT,
     form_field,
@@ -83,20 +84,59 @@ def edit_campaign_page() -> rx.Component:
             ),
             margin_bottom="16px",
         ),
-        # -- Section 2: Goal & Links
+        # -- Section 2: Goal & Timeline
         glass_card(
             section_header(
                 "target",
-                "Goal & Links",
-                "Collection target and booking page URL",
+                "Goal & Timeline",
+                "Collection target, deadline, and booking page",
             ),
             rx.vstack(
                 form_field("Collection Goal", NexusState.form_goal,
                        NexusState.set_form_goal,
                        "100"),
+                rx.vstack(
+                    rx.text("Deadline (optional)", size="2", weight="medium", color=SUBTEXT),
+                    rx.el.input(
+                        type="date",
+                        default_value=NexusState.form_deadline,
+                        on_change=NexusState.set_form_deadline,
+                        style={
+                            "width": "100%",
+                            "padding": "8px 12px",
+                            "border_radius": RADIUS_MD,
+                            "border": "1px solid rgba(255,255,255,0.1)",
+                            "background": "rgba(255,255,255,0.04)",
+                            "color": "inherit",
+                            "font_size": "14px",
+                            "outline": "none",
+                        },
+                    ),
+                    spacing="1",
+                    width="100%",
+                ),
                 form_field("Booking Page URL", NexusState.form_booking_url,
                        NexusState.set_form_booking_url,
                        "https://calendly.com/..."),
+                spacing="3",
+                width="100%",
+            ),
+            margin_bottom="16px",
+        ),
+        # -- Section 3: External Links
+        glass_card(
+            section_header(
+                "link",
+                "External Links",
+                "Notion page and Linear project for this campaign",
+            ),
+            rx.vstack(
+                form_field("Notion Page URL", NexusState.form_notion_url,
+                       NexusState.set_form_notion_url,
+                       "https://notion.so/..."),
+                form_field("Linear Project URL", NexusState.form_linear_url,
+                       NexusState.set_form_linear_url,
+                       "https://linear.app/..."),
                 spacing="3",
                 width="100%",
             ),
