@@ -271,6 +271,123 @@ def progress_bar(pct, height: str = "6px") -> rx.Component:
     )
 
 
+def dual_progress_bar(
+    booked_pct,
+    completed_pct,
+    goal: int | None = None,
+    height: str = "10px",
+) -> rx.Component:
+    """Dual-layer progress bar showing booked (light) and completed (solid).
+
+    *booked_pct* and *completed_pct* are ``Var[int]`` (0-100).
+    Milestone markers are drawn at 25%, 50%, 75%.
+    """
+    bar_bg = rx.color_mode_cond(
+        light="rgba(0,0,0,0.05)", dark="rgba(255,255,255,0.06)",
+    )
+    booked_color = rx.color_mode_cond(
+        light="rgba(99,102,241,0.2)", dark="rgba(139,92,246,0.2)",
+    )
+
+    def _milestone_marker(left_pct: str, label: str) -> rx.Component:
+        return rx.box(
+            rx.tooltip(
+                rx.box(
+                    width="2px",
+                    height="100%",
+                    background=rx.color_mode_cond(
+                        light="rgba(0,0,0,0.15)", dark="rgba(255,255,255,0.15)",
+                    ),
+                ),
+                content=label,
+            ),
+            position="absolute",
+            left=left_pct,
+            top="0",
+            height="100%",
+            z_index="3",
+        )
+
+    return rx.box(
+        # Booked layer (background)
+        rx.box(
+            width=booked_pct.to(str) + "%",
+            height="100%",
+            border_radius=RADIUS_SM,
+            background=booked_color,
+            position="absolute",
+            left="0",
+            top="0",
+            transition="width 0.7s cubic-bezier(0.4,0,0.2,1)",
+            z_index="1",
+        ),
+        # Completed layer (foreground)
+        rx.box(
+            width=completed_pct.to(str) + "%",
+            height="100%",
+            border_radius=RADIUS_SM,
+            background=ACCENT_GRADIENT_H,
+            position="absolute",
+            left="0",
+            top="0",
+            transition="width 0.7s cubic-bezier(0.4,0,0.2,1)",
+            z_index="2",
+        ),
+        # Milestone markers
+        _milestone_marker("25%", "25%"),
+        _milestone_marker("50%", "50%"),
+        _milestone_marker("75%", "75%"),
+        width="100%",
+        height=height,
+        border_radius=RADIUS_SM,
+        overflow="visible",
+        background=bar_bg,
+        position="relative",
+    )
+
+
+def milestone_badges(
+    q1_reached,
+    q2_reached,
+    q3_reached,
+    q4_reached,
+) -> rx.Component:
+    """Row of 4 milestone badges that light up when reached.
+
+    Each argument is a ``Var[bool]``.
+    """
+    def _badge(label: str, reached) -> rx.Component:
+        return rx.box(
+            rx.text(
+                label,
+                size="1",
+                weight="bold",
+                color=rx.cond(reached, "white", SUBTEXT),
+            ),
+            padding_x="8px",
+            padding_y="3px",
+            border_radius=RADIUS_FULL,
+            background=rx.cond(reached, ACCENT_GRADIENT, "transparent"),
+            border=rx.cond(
+                reached,
+                "1px solid transparent",
+                rx.color_mode_cond(
+                    light="1px solid rgba(0,0,0,0.08)",
+                    dark="1px solid rgba(255,255,255,0.08)",
+                ),
+            ),
+            transition=TRANSITION,
+        )
+
+    return rx.hstack(
+        _badge("25%", q1_reached),
+        _badge("50%", q2_reached),
+        _badge("75%", q3_reached),
+        _badge("100%", q4_reached),
+        spacing="2",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # STATUS HELPERS
 # ═══════════════════════════════════════════════════════════════════════════

@@ -83,20 +83,17 @@ def edit_campaign_page() -> rx.Component:
             ),
             margin_bottom="16px",
         ),
-        # -- Section 2: External Links
+        # -- Section 2: Goal & Links
         glass_card(
             section_header(
-                "link",
-                "External Links",
-                "Notion, Linear, and booking page URLs",
+                "target",
+                "Goal & Links",
+                "Collection target and booking page URL",
             ),
             rx.vstack(
-                form_field("Notion URL", NexusState.form_notion_url,
-                       NexusState.set_form_notion_url,
-                       "https://notion.so/..."),
-                form_field("Linear URL", NexusState.form_linear_url,
-                       NexusState.set_form_linear_url,
-                       "https://linear.app/..."),
+                form_field("Collection Goal", NexusState.form_goal,
+                       NexusState.set_form_goal,
+                       "100"),
                 form_field("Booking Page URL", NexusState.form_booking_url,
                        NexusState.set_form_booking_url,
                        "https://calendly.com/..."),

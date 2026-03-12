@@ -23,7 +23,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from .mongo_client import ensure_indexes, upsert_participant
+from .mongo_client import ensure_indexes, upsert_participant, get_synced_dates_for_campaign
 
 log = logging.getLogger(__name__)
 
@@ -254,3 +254,32 @@ async def sync_calendar_for_campaign(
         total_synced += len(events)
 
     return total_synced
+
+
+async def sync_campaign_date_range(
+    campaign: dict,
+    start_date: str,
+    end_date: str,
+) -> dict:
+    """Sync events for a date range (inclusive).
+
+    Returns ``{synced: int, days: int}`` with totals.
+    """
+    from datetime import datetime as _dt, timedelta as _td  # noqa: local import to keep top-level clean
+
+    start = _dt.strptime(start_date, "%Y-%m-%d")
+    end = _dt.strptime(end_date, "%Y-%m-%d")
+    if end < start:
+        start, end = end, start
+
+    total_synced = 0
+    days = 0
+    current = start
+    while current <= end:
+        ds = current.strftime("%Y-%m-%d")
+        count = await sync_calendar_for_campaign(campaign, ds)
+        total_synced += count
+        days += 1
+        current += _td(days=1)
+
+    return {"synced": total_synced, "days": days}

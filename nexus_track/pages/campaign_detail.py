@@ -42,6 +42,8 @@ from ..components.design_tokens import (
     VIOLET,
     glass_card,
     ghost_icon_btn,
+    dual_progress_bar,
+    milestone_badges,
     progress_bar,
     section_header,
     status_dot,
@@ -259,29 +261,29 @@ def _campaign_header() -> rx.Component:
                     align="center",
                 ),
             ),
-            # External links
-            rx.cond(
-                NexusState.campaign_notion_url != "",
-                rx.link(
-                    rx.hstack(
-                        rx.icon("book-open", size=12),
-                        rx.text("Notion", size="1"),
-                        spacing="1", color=ACCENT,
-                    ),
-                    href=NexusState.campaign_notion_url,
-                    is_external=True,
+            # Goal pill
+            rx.hstack(
+                rx.icon("target", size=12, color=ACCENT),
+                rx.text(
+                    "Goal: " + NexusState.campaign_goal.to(str),
+                    size="1",
+                    weight="medium",
                 ),
+                spacing="1",
+                align="center",
+                padding_x="10px",
+                padding_y="4px",
+                border_radius=RADIUS_SM,
+                background=ACCENT_SOFT,
             ),
+            # Last sync pill
             rx.cond(
-                NexusState.campaign_linear_url != "",
-                rx.link(
-                    rx.hstack(
-                        rx.icon("git-branch", size=12),
-                        rx.text("Linear", size="1"),
-                        spacing="1", color=ACCENT,
-                    ),
-                    href=NexusState.campaign_linear_url,
-                    is_external=True,
+                NexusState.campaign_last_sync != "",
+                rx.hstack(
+                    rx.icon("refresh-cw", size=12, color=SUBTEXT),
+                    rx.text(NexusState.campaign_last_sync, size="1", color=SUBTEXT),
+                    spacing="1",
+                    align="center",
                 ),
             ),
             rx.cond(
@@ -311,14 +313,15 @@ def _campaign_header() -> rx.Component:
 
 def _stats_and_progress() -> rx.Component:
     return rx.vstack(
+        # Daily stat pills
         rx.hstack(
             _stat_pill("Pending", NexusState.pending_count, AMBER, AMBER_SOFT),
             _stat_pill("Active", NexusState.in_progress_count, ACCENT, ACCENT_SOFT),
             _stat_pill("Done", NexusState.completed_count, GREEN, GREEN_SOFT),
             rx.spacer(),
             rx.text(
-                NexusState.progress_pct.to(str) + "%",
-                size="4",
+                NexusState.progress_pct.to(str) + "% today",
+                size="3",
                 weight="bold",
                 background=ACCENT_GRADIENT,
                 background_clip="text",
@@ -329,7 +332,50 @@ def _stats_and_progress() -> rx.Component:
             width="100%",
             flex_wrap="wrap",
         ),
-        progress_bar(NexusState.progress_pct, height="8px"),
+        # Daily progress bar
+        progress_bar(NexusState.progress_pct, height="6px"),
+        # Overall campaign progress (booked vs completed vs goal)
+        glass_card(
+            rx.hstack(
+                rx.text("Campaign Progress", size="2", weight="bold", color=HEADING),
+                rx.spacer(),
+                rx.hstack(
+                    rx.text(
+                        NexusState.campaign_completed_all.to(str) + " completed",
+                        size="1", weight="medium", color=GREEN,
+                    ),
+                    rx.text("·", size="1", color=MUTED),
+                    rx.text(
+                        NexusState.campaign_booked.to(str) + " booked",
+                        size="1", weight="medium", color=ACCENT,
+                    ),
+                    rx.text("·", size="1", color=MUTED),
+                    rx.text(
+                        "Goal: " + NexusState.campaign_goal.to(str),
+                        size="1", weight="medium", color=SUBTEXT,
+                    ),
+                    spacing="2",
+                    align="center",
+                ),
+                width="100%",
+                align="center",
+            ),
+            rx.box(height="8px"),
+            dual_progress_bar(
+                NexusState.booked_pct,
+                NexusState.completed_pct,
+                NexusState.campaign_goal,
+                height="10px",
+            ),
+            rx.box(height="8px"),
+            milestone_badges(
+                NexusState.milestone_quarter,
+                NexusState.milestone_half,
+                NexusState.milestone_three_quarter,
+                NexusState.milestone_complete,
+            ),
+            padding="16px 20px",
+        ),
         spacing="3",
         width="100%",
         margin_bottom="16px",
@@ -340,16 +386,142 @@ def _stats_and_progress() -> rx.Component:
 # Sync bar + search + CSV export + Add participant
 # -----------------------------------------------------------------------
 
+def _range_sync_panel() -> rx.Component:
+    """Date-range sync UI - sync multiple days at once."""
+    return glass_card(
+        rx.hstack(
+            rx.icon("calendar-range", size=16, color=ACCENT),
+            rx.text("Range Sync", size="2", weight="bold", color=HEADING),
+            rx.spacer(),
+            rx.cond(
+                NexusState.range_sync_result != "",
+                rx.badge(
+                    NexusState.range_sync_result,
+                    color_scheme="green",
+                    size="1",
+                    variant="soft",
+                ),
+            ),
+            width="100%",
+            align="center",
+        ),
+        rx.hstack(
+            rx.vstack(
+                rx.text("Start", size="1", color=SUBTEXT),
+                rx.el.input(
+                    type="date",
+                    default_value=NexusState.sync_start_date,
+                    on_change=NexusState.set_sync_start_date,
+                    style={
+                        "padding": "6px 10px",
+                        "border_radius": RADIUS_SM,
+                        "border": BORDER,
+                        "background": CARD_BG,
+                        "color": TEXT,
+                        "font_size": "13px",
+                    },
+                ),
+                spacing="1",
+            ),
+            rx.vstack(
+                rx.text("End", size="1", color=SUBTEXT),
+                rx.el.input(
+                    type="date",
+                    default_value=NexusState.sync_end_date,
+                    on_change=NexusState.set_sync_end_date,
+                    style={
+                        "padding": "6px 10px",
+                        "border_radius": RADIUS_SM,
+                        "border": BORDER,
+                        "background": CARD_BG,
+                        "color": TEXT,
+                        "font_size": "13px",
+                    },
+                ),
+                spacing="1",
+            ),
+            rx.button(
+                rx.cond(
+                    NexusState.is_syncing,
+                    rx.spinner(size="1"),
+                    rx.icon("refresh-cw", size=14),
+                ),
+                "Sync Range",
+                size="2",
+                variant="solid",
+                color_scheme="iris",
+                border_radius=RADIUS_MD,
+                on_click=NexusState.sync_campaign_range,
+                loading=NexusState.is_syncing,
+                cursor="pointer",
+                align_self="end",
+            ),
+            spacing="3",
+            align="end",
+            margin_top="8px",
+        ),
+        margin_bottom="12px",
+        padding="14px 18px",
+    )
+
+
+def _issue_editor_dialog() -> rx.Component:
+    """Modal dialog for editing a participant's issue comment."""
+    return rx.cond(
+        NexusState.editing_issue_event_id != "",
+        rx.dialog.root(
+            rx.dialog.content(
+                rx.dialog.title("Edit Issue Comment"),
+                rx.dialog.description(
+                    "Describe the issue with this participant. "
+                    "Leave blank and save to clear the issue flag.",
+                ),
+                rx.text_area(
+                    value=NexusState.editing_issue_comment,
+                    on_change=NexusState.set_editing_issue_comment,
+                    placeholder="e.g. Participant arrived late, device malfunction...",
+                    width="100%",
+                    min_height="100px",
+                    margin_top="12px",
+                ),
+                rx.hstack(
+                    rx.dialog.close(
+                        rx.button(
+                            "Cancel",
+                            variant="soft",
+                            color_scheme="gray",
+                            on_click=NexusState.close_issue_editor,
+                            cursor="pointer",
+                        ),
+                    ),
+                    rx.button(
+                        "Save",
+                        color_scheme="iris",
+                        on_click=NexusState.save_issue_comment,
+                        cursor="pointer",
+                    ),
+                    spacing="3",
+                    justify="end",
+                    width="100%",
+                    margin_top="16px",
+                ),
+            ),
+            open=NexusState.editing_issue_event_id != "",
+        ),
+        rx.fragment(),
+    )
+
+
 def _sync_bar() -> rx.Component:
     return rx.hstack(
-        # Sync button
+        # Sync today button
         rx.button(
             rx.cond(
                 NexusState.is_syncing,
                 rx.spinner(size="1"),
                 rx.icon("refresh-cw", size=14),
             ),
-            "Sync",
+            "Sync Today",
             size="2",
             variant="soft",
             color_scheme="iris",
@@ -750,6 +922,10 @@ def campaign_detail_page() -> rx.Component:
         _stats_and_progress(),
         # -- sync & search bar
         _sync_bar(),
+        # -- range sync panel
+        _range_sync_panel(),
+        # -- issue editor dialog
+        _issue_editor_dialog(),
         # -- add participant panel
         _add_participant_dialog(),
         # -- bulk action bar

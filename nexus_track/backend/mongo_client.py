@@ -113,19 +113,27 @@ async def create_campaign(data: dict) -> str:
     """Create a campaign and return its short ID."""
     cid = secrets.token_hex(4)
     now = datetime.now(timezone.utc).isoformat()
+
+    # Validate and coerce goal to a positive integer (default 100).
+    raw_goal = data.get("goal", 100)
+    try:
+        goal = max(1, int(raw_goal))
+    except (ValueError, TypeError):
+        goal = 100
+
     await _campaigns().insert_one({
         "campaign_id": cid,
         "name": data["name"],
         "description": data.get("description", ""),
-        "notion_url": data.get("notion_url", ""),
-        "linear_url": data.get("linear_url", ""),
         "booking_url": data.get("booking_url", ""),
+        "goal": goal,
         # calendar_ids is a list of {calendar_id, filter} objects
         "calendar_ids": data.get("calendar_ids", []),
         # legacy single-calendar fields kept for backward compat
         "calendar_id": data.get("calendar_id", "primary") or "primary",
         "calendar_filter": data.get("calendar_filter", ""),
         "status": "active",
+        "last_sync_at": None,
         "created_at": now,
         "updated_at": now,
     })
@@ -136,10 +144,19 @@ async def update_campaign(campaign_id: str, data: dict) -> None:
     """Bulk-update writable campaign fields."""
     now = datetime.now(timezone.utc).isoformat()
     allowed = {
-        "name", "description", "notion_url", "linear_url", "booking_url",
+        "name", "description", "booking_url",
         "calendar_id", "calendar_filter", "calendar_ids", "status",
+        "goal",
     }
     sets = {k: v for k, v in data.items() if k in allowed}
+
+    # Coerce goal if present
+    if "goal" in sets:
+        try:
+            sets["goal"] = max(1, int(sets["goal"]))
+        except (ValueError, TypeError):
+            del sets["goal"]
+
     sets["updated_at"] = now
     await _campaigns().update_one(
         {"campaign_id": campaign_id},
@@ -152,6 +169,8 @@ async def get_all_campaigns() -> list[dict]:
     out: list[dict] = []
     async for doc in cursor:
         doc["_id"] = str(doc["_id"])
+        # Backfill goal for old campaigns
+        doc.setdefault("goal", 100)
         out.append(doc)
     return out
 
@@ -160,6 +179,7 @@ async def get_campaign(campaign_id: str) -> dict | None:
     doc = await _campaigns().find_one({"campaign_id": campaign_id})
     if doc:
         doc["_id"] = str(doc["_id"])
+        doc.setdefault("goal", 100)
     return doc
 
 
@@ -198,11 +218,54 @@ async def unarchive_campaign(campaign_id: str) -> None:
 # Campaign + date stats (for the dashboard cards)
 # =========================================================================
 
+async def get_campaign_progress(campaign_id: str) -> dict:
+    """Return aggregated progress stats across ALL dates for a campaign.
+
+    Returns {booked, completed} where:
+      - booked   = distinct participants with a scheduled appointment
+      - completed = distinct participants whose status is 'Completed'
+    Participant-based (not appointment-based) — each unique participant
+    counts at most once regardless of rescheduled or duplicate records.
+    """
+    pipeline = [
+        {"$match": {"campaign_id": campaign_id}},
+        # Deduplicate by email (or fallback to event_id if email empty).
+        {"$group": {
+            "_id": {
+                "$cond": [
+                    {"$ne": ["$email", ""]},
+                    "$email",
+                    {"$concat": ["$name", "||", "$google_event_id"]},
+                ]
+            },
+            "statuses": {"$addToSet": "$status"},
+        }},
+        {"$group": {
+            "_id": None,
+            "booked": {"$sum": 1},
+            "completed": {
+                "$sum": {
+                    "$cond": [
+                        {"$in": ["Completed", "$statuses"]},
+                        1, 0,
+                    ]
+                }
+            },
+        }},
+    ]
+    cursor = _participants().aggregate(pipeline)
+    result = await cursor.to_list(length=1)
+    if result:
+        return {"booked": result[0]["booked"], "completed": result[0]["completed"]}
+    return {"booked": 0, "completed": 0}
+
+
 async def get_all_campaigns_with_stats(
     date: str | None = None,
     include_archived: bool = False,
 ) -> list[dict]:
-    """Return every campaign enriched with participant counts for *date*.
+    """Return every campaign enriched with participant counts for *date*
+    AND overall progress (booked/completed across all dates).
 
     By default archived campaigns are excluded from the list.
     """
@@ -212,7 +275,10 @@ async def get_all_campaigns_with_stats(
     if date is None:
         date = datetime.now().strftime("%Y-%m-%d")
     for c in campaigns:
-        parts = await get_participants_for_campaign(c["campaign_id"], date)
+        cid = c["campaign_id"]
+
+        # Per-date stats (for the daily view)
+        parts = await get_participants_for_campaign(cid, date)
         total = len(parts)
         completed = sum(1 for p in parts if p.get("status") == "Completed")
         in_prog = sum(1 for p in parts if p.get("status") == "In-Progress")
@@ -221,6 +287,11 @@ async def get_all_campaigns_with_stats(
         c["today_in_progress"] = in_prog
         c["today_pending"] = total - completed - in_prog
         c["today_progress"] = int(completed / total * 100) if total else 0
+
+        # Overall progress across all dates
+        progress = await get_campaign_progress(cid)
+        c["booked"] = progress["booked"]
+        c["completed_all"] = progress["completed"]
     return campaigns
 
 
@@ -247,6 +318,7 @@ async def upsert_participant(
                 "google_event_id": event_id,
                 "platform": "", "model_tag": "",
                 "status": "Pending", "notes": "",
+                "issue_comment": "",
                 "start_time": None, "end_time": None,
                 "created_at": now,
             },
@@ -266,8 +338,9 @@ async def get_participants_for_campaign(
     out: list[dict] = []
     async for doc in cursor:
         doc["_id"] = str(doc["_id"])
-        # ensure notes field exists for older documents
+        # ensure fields exist for older documents
         doc.setdefault("notes", "")
+        doc.setdefault("issue_comment", "")
         out.append(doc)
     return out
 
@@ -328,6 +401,7 @@ async def add_manual_participant(
         "model_tag": "",
         "status": "Pending",
         "notes": "",
+        "issue_comment": "",
         "start_time": None,
         "end_time": None,
         "created_at": now,
@@ -379,5 +453,17 @@ async def get_participants_for_export(
             "model_tag": doc.get("model_tag", ""),
             "status": doc.get("status", ""),
             "notes": doc.get("notes", ""),
+            "issue_comment": doc.get("issue_comment", ""),
         })
     return out
+
+
+# =========================================================================
+# Multi-day sync helpers
+# =========================================================================
+
+async def get_synced_dates_for_campaign(campaign_id: str) -> list[str]:
+    """Return distinct appointment_date values already in the DB."""
+    return await _participants().distinct(
+        "appointment_date", {"campaign_id": campaign_id},
+    )

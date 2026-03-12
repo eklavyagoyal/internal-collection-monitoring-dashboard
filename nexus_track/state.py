@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 import reflex as rx
 
-from .backend.gcal_sync import list_calendars, sync_calendar_for_campaign
+from .backend.gcal_sync import list_calendars, sync_calendar_for_campaign, sync_campaign_date_range
 from .backend.mongo_client import (
     add_manual_participant,
     archive_campaign as db_archive_campaign,
@@ -25,6 +25,7 @@ from .backend.mongo_client import (
     ensure_indexes,
     get_all_campaigns_with_stats,
     get_campaign,
+    get_campaign_progress,
     get_participants_for_campaign,
     get_participants_for_export,
     get_settings,
@@ -94,14 +95,22 @@ class NexusState(rx.State):
     # CAMPAIGN FORM
     form_name: str = ""
     form_description: str = ""
-    form_notion_url: str = ""
-    form_linear_url: str = ""
     form_booking_url: str = ""
+    form_goal: str = "100"
     form_calendar_id: str = "primary"
     form_calendar_filter: str = ""
     form_error: str = ""
     form_is_edit: bool = False
     form_edit_campaign_id: str = ""
+
+    # ISSUE TRACKING
+    editing_issue_event_id: str = ""
+    editing_issue_comment: str = ""
+
+    # RANGE SYNC
+    sync_start_date: str = ""
+    sync_end_date: str = ""
+    range_sync_result: str = ""
 
     # DELETE CONFIRMATION
     show_delete_dialog: bool = False
@@ -176,16 +185,57 @@ class NexusState(rx.State):
         return self.current_campaign.get("description", "")
 
     @rx.var(cache=True)
-    def campaign_notion_url(self) -> str:
-        return self.current_campaign.get("notion_url", "")
-
-    @rx.var(cache=True)
-    def campaign_linear_url(self) -> str:
-        return self.current_campaign.get("linear_url", "")
-
-    @rx.var(cache=True)
     def campaign_booking_url(self) -> str:
         return self.current_campaign.get("booking_url", "")
+
+    @rx.var(cache=True)
+    def campaign_goal(self) -> int:
+        return int(self.current_campaign.get("goal", 100))
+
+    @rx.var(cache=True)
+    def campaign_booked(self) -> int:
+        return int(self.current_campaign.get("booked", 0))
+
+    @rx.var(cache=True)
+    def campaign_completed_all(self) -> int:
+        return int(self.current_campaign.get("completed_all", 0))
+
+    @rx.var(cache=True)
+    def booked_pct(self) -> int:
+        g = self.campaign_goal
+        return min(100, int(self.campaign_booked / g * 100)) if g else 0
+
+    @rx.var(cache=True)
+    def completed_pct(self) -> int:
+        g = self.campaign_goal
+        return min(100, int(self.campaign_completed_all / g * 100)) if g else 0
+
+    @rx.var(cache=True)
+    def milestone_quarter(self) -> bool:
+        return self.campaign_completed_all >= self.campaign_goal * 0.25
+
+    @rx.var(cache=True)
+    def milestone_half(self) -> bool:
+        return self.campaign_completed_all >= self.campaign_goal * 0.5
+
+    @rx.var(cache=True)
+    def milestone_three_quarter(self) -> bool:
+        return self.campaign_completed_all >= self.campaign_goal * 0.75
+
+    @rx.var(cache=True)
+    def milestone_complete(self) -> bool:
+        return self.campaign_completed_all >= self.campaign_goal
+
+    @rx.var(cache=True)
+    def campaign_last_sync(self) -> str:
+        raw = self.current_campaign.get("last_sync_at", "")
+        if not raw:
+            return "Never"
+        try:
+            dt = datetime.fromisoformat(raw)
+            return dt.strftime("%b %d %H:%M")
+        except Exception:
+            return str(raw)
 
     @rx.var(cache=True)
     def campaign_calendar_filter(self) -> str:
@@ -242,11 +292,11 @@ class NexusState(rx.State):
     @rx.var(cache=True)
     def display_date_label(self) -> str:
         d = self.selected_date
+        today = datetime.now().date()
         if not d:
-            return datetime.now().strftime("%A, %B %d")
+            return datetime.now().strftime("%A, %B %d") + "  \u00b7  Today"
         try:
             dt = datetime.strptime(d, "%Y-%m-%d")
-            today = datetime.now().date()
             if dt.date() == today:
                 return dt.strftime("%A, %B %d") + "  \u00b7  Today"
             delta = (dt.date() - today).days
@@ -409,6 +459,10 @@ class NexusState(rx.State):
             await self.load_settings()
             campaign = await get_campaign(cid)
             if campaign:
+                # Merge overall progress into the campaign dict
+                progress = await get_campaign_progress(cid)
+                campaign["booked"] = progress["booked"]
+                campaign["completed_all"] = progress["completed"]
                 self.current_campaign = campaign
                 date = self._get_date()
                 self.participants = await get_participants_for_campaign(cid, date)
@@ -509,13 +563,75 @@ class NexusState(rx.State):
             if not campaign:
                 raise ValueError("No campaign loaded")
             count = await sync_calendar_for_campaign(campaign, date)
+            # Update last_sync_at on the campaign
+            from .backend.mongo_client import update_campaign_field as _ucf
+            await _ucf(cid, "last_sync_at", datetime.now().isoformat())
             fresh = await get_participants_for_campaign(cid, date)
+            progress = await get_campaign_progress(cid)
             async with self:
                 self.participants = fresh
+                camp = dict(self.current_campaign)
+                camp["booked"] = progress["booked"]
+                camp["completed_all"] = progress["completed"]
+                camp["last_sync_at"] = datetime.now().isoformat()
+                self.current_campaign = camp
                 self.last_sync_time = datetime.now().strftime("%H:%M:%S")
                 self.is_syncing = False
         except Exception as exc:
             log.exception("Calendar sync failed")
+            async with self:
+                self.sync_error = str(exc)
+                self.is_syncing = False
+
+    # RANGE SYNC (background)
+
+    def set_sync_start_date(self, v: str):
+        self.sync_start_date = v
+
+    def set_sync_end_date(self, v: str):
+        self.sync_end_date = v
+
+    @rx.event(background=True)
+    async def sync_campaign_range(self):
+        """Sync events for a date range instead of a single day."""
+        async with self:
+            self.is_syncing = True
+            self.sync_error = ""
+            self.range_sync_result = ""
+            campaign = dict(self.current_campaign)
+            cid = self.active_campaign_id
+            start = self.sync_start_date
+            end = self.sync_end_date
+        if not start or not end:
+            async with self:
+                self.sync_error = "Select both start and end dates."
+                self.is_syncing = False
+            return
+        try:
+            if not campaign:
+                raise ValueError("No campaign loaded")
+            result = await sync_campaign_date_range(campaign, start, end)
+            # Update last_sync_at on the campaign
+            from .backend.mongo_client import update_campaign_field as _ucf
+            await _ucf(cid, "last_sync_at", datetime.now().isoformat())
+            fresh = await get_participants_for_campaign(
+                cid, self.selected_date or datetime.now().strftime("%Y-%m-%d"),
+            )
+            # Refresh overall progress
+            progress = await get_campaign_progress(cid)
+            async with self:
+                self.participants = fresh
+                camp = dict(self.current_campaign)
+                camp["booked"] = progress["booked"]
+                camp["completed_all"] = progress["completed"]
+                camp["last_sync_at"] = datetime.now().isoformat()
+                self.current_campaign = camp
+                self.range_sync_result = (
+                    f"Synced {result['synced']} events across {result['days']} days"
+                )
+                self.is_syncing = False
+        except Exception as exc:
+            log.exception("Range sync failed")
             async with self:
                 self.sync_error = str(exc)
                 self.is_syncing = False
@@ -576,6 +692,54 @@ class NexusState(rx.State):
                 for p in self.participants
             ]
 
+    # ISSUE TRACKING
+
+    def open_issue_editor(self, event_id: str):
+        """Open the issue comment editor for a participant."""
+        self.editing_issue_event_id = event_id
+        # Pre-fill with existing comment
+        for p in self.participants:
+            if p.get("google_event_id") == event_id:
+                self.editing_issue_comment = p.get("issue_comment", "")
+                break
+
+    def set_editing_issue_comment(self, v: str):
+        self.editing_issue_comment = v
+
+    async def save_issue_comment(self):
+        """Save the issue comment and close editor."""
+        cid = self.active_campaign_id
+        eid = self.editing_issue_event_id
+        comment = self.editing_issue_comment.strip()
+        if cid and eid:
+            await db_update_field(cid, eid, "issue_comment", comment)
+            self.participants = [
+                {**p, "issue_comment": comment} if p.get("google_event_id") == eid else p
+                for p in self.participants
+            ]
+        self.editing_issue_event_id = ""
+        self.editing_issue_comment = ""
+
+    def close_issue_editor(self):
+        self.editing_issue_event_id = ""
+        self.editing_issue_comment = ""
+
+    async def toggle_issue_flag(self, event_id: str):
+        """Toggle issue flag: if comment exists, clear it; if empty, open editor."""
+        for p in self.participants:
+            if p.get("google_event_id") == event_id:
+                if p.get("issue_comment", "").strip():
+                    # Clear the issue
+                    await db_update_field(self.active_campaign_id, event_id, "issue_comment", "")
+                    self.participants = [
+                        {**pp, "issue_comment": ""} if pp.get("google_event_id") == event_id else pp
+                        for pp in self.participants
+                    ]
+                else:
+                    # Open editor
+                    self.open_issue_editor(event_id)
+                break
+
     def set_search(self, query: str):
         self.search_query = query
 
@@ -628,7 +792,7 @@ class NexusState(rx.State):
         buf = io.StringIO()
         writer = csv.DictWriter(
             buf,
-            fieldnames=["name", "email", "date", "time", "platform", "model_tag", "status", "notes"],
+            fieldnames=["name", "email", "date", "time", "platform", "model_tag", "status", "notes", "issue_comment"],
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -658,14 +822,11 @@ class NexusState(rx.State):
     def set_form_description(self, v: str):
         self.form_description = v
 
-    def set_form_notion_url(self, v: str):
-        self.form_notion_url = v
-
-    def set_form_linear_url(self, v: str):
-        self.form_linear_url = v
-
     def set_form_booking_url(self, v: str):
         self.form_booking_url = v
+
+    def set_form_goal(self, v: str):
+        self.form_goal = v
 
     def set_form_calendar_id(self, v: str):
         self.form_calendar_id = v
@@ -676,9 +837,8 @@ class NexusState(rx.State):
     def clear_form(self):
         self.form_name = ""
         self.form_description = ""
-        self.form_notion_url = ""
-        self.form_linear_url = ""
         self.form_booking_url = ""
+        self.form_goal = "100"
         self.form_calendar_id = "primary"
         self.form_calendar_filter = ""
         self.form_error = ""
@@ -697,9 +857,8 @@ class NexusState(rx.State):
         self.form_edit_campaign_id = cid
         self.form_name = campaign.get("name", "")
         self.form_description = campaign.get("description", "")
-        self.form_notion_url = campaign.get("notion_url", "")
-        self.form_linear_url = campaign.get("linear_url", "")
         self.form_booking_url = campaign.get("booking_url", "")
+        self.form_goal = str(campaign.get("goal", 100))
         self.form_calendar_id = campaign.get("calendar_id", "primary")
         self.form_calendar_filter = campaign.get("calendar_filter", "")
         self.form_error = ""
@@ -711,9 +870,8 @@ class NexusState(rx.State):
         cid = await db_create_campaign({
             "name": self.form_name.strip(),
             "description": self.form_description.strip(),
-            "notion_url": self.form_notion_url.strip(),
-            "linear_url": self.form_linear_url.strip(),
             "booking_url": self.form_booking_url.strip(),
+            "goal": self.form_goal.strip() or "100",
             "calendar_id": self.form_calendar_id.strip() or "primary",
             "calendar_filter": self.form_calendar_filter.strip(),
         })
@@ -730,9 +888,8 @@ class NexusState(rx.State):
         await db_update_campaign(cid, {
             "name": self.form_name.strip(),
             "description": self.form_description.strip(),
-            "notion_url": self.form_notion_url.strip(),
-            "linear_url": self.form_linear_url.strip(),
             "booking_url": self.form_booking_url.strip(),
+            "goal": self.form_goal.strip() or "100",
             "calendar_id": self.form_calendar_id.strip() or "primary",
             "calendar_filter": self.form_calendar_filter.strip(),
         })

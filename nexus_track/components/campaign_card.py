@@ -1,9 +1,11 @@
-"""Campaign card — glass card with gradient accent stripe and progress bar."""
+"""Campaign card — glass card with gradient accent stripe and dual progress bar."""
 
 import reflex as rx
 
 from .design_tokens import (
+    ACCENT,
     ACCENT_GRADIENT_H,
+    ACCENT_SOFT,
     AMBER,
     BORDER,
     CARD_BG,
@@ -11,12 +13,13 @@ from .design_tokens import (
     HEADING,
     HOVER_LIFT,
     RADIUS_LG,
+    RADIUS_SM,
     SHADOW_SM,
     SUBTEXT,
     TEXT,
     TRANSITION,
     campaign_status_indicator,
-    progress_bar,
+    dual_progress_bar,
 )
 
 
@@ -28,7 +31,14 @@ def campaign_card(campaign: dict) -> rx.Component:
     today_total = campaign["today_total"].to(int)
     today_completed = campaign["today_completed"].to(int)
     today_in_progress = campaign["today_in_progress"].to(int)
-    today_progress = campaign["today_progress"].to(int)
+
+    # Overall progress (all dates, goal-based)
+    goal = campaign["goal"].to(int)
+    booked = campaign["booked"].to(int)
+    completed_all = campaign["completed_all"].to(int)
+
+    booked_pct = rx.cond(goal > 0, (booked * 100 / goal).to(int), 0)
+    completed_pct = rx.cond(goal > 0, (completed_all * 100 / goal).to(int), 0)
 
     return rx.link(
         rx.box(
@@ -41,15 +51,24 @@ def campaign_card(campaign: dict) -> rx.Component:
                 opacity="0.7",
             ),
             rx.vstack(
-                # -- Top: status + fraction
+                # -- Top: status + goal fraction
                 rx.hstack(
                     campaign_status_indicator(status),
                     rx.spacer(),
-                    rx.text(
-                        today_completed, "/", today_total,
-                        size="1", weight="bold",
-                        color=SUBTEXT,
-                        font_variant_numeric="tabular-nums",
+                    rx.hstack(
+                        rx.text(
+                            completed_all, "/", goal,
+                            size="1", weight="bold",
+                            color=ACCENT,
+                            font_variant_numeric="tabular-nums",
+                        ),
+                        rx.text(
+                            "goal",
+                            size="1",
+                            color=SUBTEXT,
+                        ),
+                        spacing="1",
+                        align="center",
                     ),
                     width="100%", align="center",
                 ),
@@ -74,10 +93,44 @@ def campaign_card(campaign: dict) -> rx.Component:
                     rx.fragment(),
                 ),
                 rx.spacer(),
-                # -- Progress bar
-                progress_bar(today_progress, height="5px"),
-                # -- Activity pills
+                # -- Dual progress bar (booked + completed vs goal)
+                rx.vstack(
+                    dual_progress_bar(booked_pct, completed_pct, height="8px"),
+                    rx.hstack(
+                        rx.hstack(
+                            rx.box(
+                                width="8px", height="3px",
+                                border_radius="2px",
+                                background=ACCENT_GRADIENT_H,
+                            ),
+                            rx.text(completed_all, " completed", size="1", color=SUBTEXT),
+                            spacing="1", align="center",
+                        ),
+                        rx.hstack(
+                            rx.box(
+                                width="8px", height="3px",
+                                border_radius="2px",
+                                background=ACCENT_SOFT,
+                            ),
+                            rx.text(booked, " booked", size="1", color=SUBTEXT),
+                            spacing="1", align="center",
+                        ),
+                        spacing="3",
+                    ),
+                    spacing="1",
+                    width="100%",
+                ),
+                # -- Today's activity pills
                 rx.hstack(
+                    rx.center(
+                        rx.text(
+                            "Today: ", today_completed, "/", today_total,
+                            size="1", weight="medium", color=ACCENT,
+                        ),
+                        padding="2px 8px",
+                        border_radius=RADIUS_SM,
+                        background=ACCENT_SOFT,
+                    ),
                     rx.cond(
                         today_in_progress > 0,
                         rx.hstack(
@@ -88,21 +141,6 @@ def campaign_card(campaign: dict) -> rx.Component:
                             rx.text(
                                 today_in_progress, " active",
                                 size="1", color=AMBER,
-                            ),
-                            spacing="1", align="center",
-                        ),
-                        rx.fragment(),
-                    ),
-                    rx.cond(
-                        today_completed > 0,
-                        rx.hstack(
-                            rx.box(
-                                width="5px", height="5px",
-                                border_radius="50%", bg=GREEN,
-                            ),
-                            rx.text(
-                                today_completed, " done",
-                                size="1", color=GREEN,
                             ),
                             spacing="1", align="center",
                         ),
@@ -120,7 +158,7 @@ def campaign_card(campaign: dict) -> rx.Component:
             border=BORDER,
             backdrop_filter="blur(16px) saturate(180%)",
             box_shadow=SHADOW_SM,
-            min_height="230px",
+            min_height="260px",
             overflow="hidden",
             transition=TRANSITION,
             cursor="pointer",

@@ -6,12 +6,15 @@ from ..state import NexusState
 from ..components.design_tokens import (
     ACCENT,
     ACCENT_SOFT,
+    AMBER,
     BORDER,
     BORDER_SUBTLE,
     CARD_BG,
     HEADING,
     RADIUS_MD,
     RADIUS_SM,
+    RED,
+    RED_SOFT,
     SHADOW_SM,
     SUBTEXT,
     TEXT,
@@ -29,6 +32,9 @@ def participant_row(p: dict) -> rx.Component:
     model_tag = p["model_tag"].to(str)
     status = p["status"].to(str)
     notes = p["notes"].to(str)
+    issue_comment = p["issue_comment"].to(str)
+
+    has_issue = issue_comment != ""
 
     return rx.box(
         rx.hstack(
@@ -43,6 +49,28 @@ def participant_row(p: dict) -> rx.Component:
             ),
             # -- Status dot
             status_dot(status, size="8px"),
+            # -- Issue indicator (!)
+            rx.tooltip(
+                rx.box(
+                    rx.icon(
+                        "alert-triangle",
+                        size=14,
+                        color=rx.cond(has_issue, RED, SUBTEXT),
+                    ),
+                    padding="4px",
+                    border_radius=RADIUS_SM,
+                    background=rx.cond(has_issue, RED_SOFT, "transparent"),
+                    cursor="pointer",
+                    on_click=NexusState.open_issue_editor(eid),
+                    _hover={"opacity": "0.8"},
+                    flex_shrink="0",
+                ),
+                content=rx.cond(
+                    has_issue,
+                    issue_comment,
+                    "Flag issue",
+                ),
+            ),
             # -- Time chip
             rx.center(
                 rx.text(
@@ -106,7 +134,8 @@ def participant_row(p: dict) -> rx.Component:
             width="100%",
             flex_wrap="wrap",
         ),
-        # -- Notes input (always visible, inline editing)
+        # -- Notes input — use default_value + on_blur for uncontrolled mode
+        #    (fixes the "notes box not responsive" bug)
         rx.box(
             rx.hstack(
                 rx.icon(
@@ -115,15 +144,20 @@ def participant_row(p: dict) -> rx.Component:
                     flex_shrink="0",
                     margin_top="5px",
                 ),
-                rx.input(
-                    value=notes,
+                rx.el.input(
+                    default_value=notes,
                     placeholder="Add notes...",
-                    on_blur=lambda v: NexusState.set_notes(eid, v),
-                    size="1",
-                    variant="surface",
-                    border_radius=RADIUS_SM,
-                    width="100%",
-                    color=TEXT,
+                    on_blur=lambda e: NexusState.set_notes(eid, e.target.value),
+                    style={
+                        "width": "100%",
+                        "padding": "6px 10px",
+                        "border_radius": RADIUS_SM,
+                        "border": "1px solid rgba(0,0,0,0.06)",
+                        "font_size": "13px",
+                        "outline": "none",
+                        "background": "transparent",
+                        "color": "inherit",
+                    },
                 ),
                 spacing="2",
                 align="start",
@@ -133,11 +167,16 @@ def participant_row(p: dict) -> rx.Component:
             margin_top="10px",
             border_top=BORDER_SUBTLE,
         ),
-        # -- Card chrome
+        # -- Card chrome — fixed min_height for consistent sizing
         padding="16px 18px",
+        min_height="110px",
         border_radius=RADIUS_MD,
         background=CARD_BG,
-        border=BORDER,
+        border=rx.cond(
+            has_issue,
+            f"1px solid {AMBER}",
+            BORDER,
+        ),
         backdrop_filter="blur(16px) saturate(180%)",
         box_shadow=SHADOW_SM,
         transition=TRANSITION_FAST,

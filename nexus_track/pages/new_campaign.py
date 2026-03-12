@@ -85,22 +85,18 @@ def new_campaign_page() -> rx.Component:
             ),
             margin_bottom="16px",
         ),
-        # -- Section 2: External Links
+        # -- Section 2: Goal & Links
         glass_card(
             section_header(
-                "link",
-                "External Links",
-                "Connect to Notion, Linear, and appointment booking tools",
+                "target",
+                "Goal & Links",
+                "Set a participant goal and connect booking tools",
             ),
             rx.vstack(
-                form_field("Notion URL", NexusState.form_notion_url,
-                       NexusState.set_form_notion_url,
-                       "https://notion.so/...",
-                       helper="Link to the Notion page for this campaign"),
-                form_field("Linear URL", NexusState.form_linear_url,
-                       NexusState.set_form_linear_url,
-                       "https://linear.app/...",
-                       helper="Link to the Linear project or issue"),
+                form_field("Collection Goal", NexusState.form_goal,
+                       NexusState.set_form_goal,
+                       "100",
+                       helper="Target number of completed participants"),
                 form_field("Booking Page URL", NexusState.form_booking_url,
                        NexusState.set_form_booking_url,
                        "https://calendly.com/...",
