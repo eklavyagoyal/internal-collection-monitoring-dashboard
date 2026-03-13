@@ -354,13 +354,13 @@ class NexusState(rx.State):
     async def add_platform(self):
         v = self.new_platform.strip()
         if v and v not in self.platforms:
-            self.platforms.append(v)
-            await update_label_list("platforms", self.platforms)
+            self.platforms = list(self.platforms) + [v]
+            await update_label_list("platforms", list(self.platforms))
         self.new_platform = ""
 
     async def remove_platform(self, label: str):
         self.platforms = [p for p in self.platforms if p != label]
-        await update_label_list("platforms", self.platforms)
+        await update_label_list("platforms", list(self.platforms))
 
     def set_new_model_tag(self, v: str):
         self.new_model_tag = v
@@ -368,13 +368,13 @@ class NexusState(rx.State):
     async def add_model_tag(self):
         v = self.new_model_tag.strip()
         if v and v not in self.model_tags:
-            self.model_tags.append(v)
-            await update_label_list("model_tags", self.model_tags)
+            self.model_tags = list(self.model_tags) + [v]
+            await update_label_list("model_tags", list(self.model_tags))
         self.new_model_tag = ""
 
     async def remove_model_tag(self, label: str):
         self.model_tags = [t for t in self.model_tags if t != label]
-        await update_label_list("model_tags", self.model_tags)
+        await update_label_list("model_tags", list(self.model_tags))
 
     def set_new_status_label(self, v: str):
         self.new_status_label = v
@@ -382,13 +382,13 @@ class NexusState(rx.State):
     async def add_status_label(self):
         v = self.new_status_label.strip()
         if v and v not in self.statuses:
-            self.statuses.append(v)
-            await update_label_list("statuses", self.statuses)
+            self.statuses = list(self.statuses) + [v]
+            await update_label_list("statuses", list(self.statuses))
         self.new_status_label = ""
 
     async def remove_status_label(self, label: str):
         self.statuses = [s for s in self.statuses if s != label]
-        await update_label_list("statuses", self.statuses)
+        await update_label_list("statuses", list(self.statuses))
 
     @rx.event(background=True)
     async def fetch_available_calendars(self):
