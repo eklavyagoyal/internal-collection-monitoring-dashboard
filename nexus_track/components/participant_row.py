@@ -141,6 +141,17 @@ def participant_row(p: dict) -> rx.Component:
                 variant="soft",
                 flex_shrink="0",
             ),
+            # Delete button
+            rx.icon_button(
+                rx.icon("trash-2", size=13),
+                size="1",
+                variant="ghost",
+                color_scheme="red",
+                on_click=NexusState.open_delete_participant(eid),
+                cursor="pointer",
+                flex_shrink="0",
+                _hover={"background": RED_SOFT},
+            ),
             spacing="3",
             align="center",
             width="100%",

@@ -19,9 +19,11 @@ from .backend.gcal_sync import list_calendars, sync_calendar_for_campaign, sync_
 from .backend.mongo_client import (
     add_manual_participant,
     archive_campaign as db_archive_campaign,
+    bulk_delete_participants as db_bulk_delete,
     bulk_update_participant_field as db_bulk_update,
     create_campaign as db_create_campaign,
     delete_campaign as db_delete_campaign,
+    delete_participant as db_delete_participant,
     ensure_indexes,
     get_all_campaigns_with_stats,
     get_campaign,
@@ -117,6 +119,14 @@ class NexusState(rx.State):
 
     # DELETE CONFIRMATION
     show_delete_dialog: bool = False
+
+    # PARTICIPANT DELETE
+    show_delete_participant_dialog: bool = False
+    delete_participant_event_id: str = ""
+    delete_participant_name: str = ""
+
+    # BULK DELETE CONFIRMATION
+    show_bulk_delete_dialog: bool = False
 
     def _get_date(self) -> str:
         return self.selected_date or datetime.now().strftime("%Y-%m-%d")
@@ -832,6 +842,50 @@ class NexusState(rx.State):
             await db_delete_campaign(cid)
             self.show_delete_dialog = False
             return rx.redirect("/")
+
+    # DELETE PARTICIPANT
+
+    def open_delete_participant(self, event_id: str):
+        """Open confirmation dialog for deleting a participant."""
+        self.delete_participant_event_id = event_id
+        for p in self.participants:
+            if p.get("google_event_id") == event_id:
+                self.delete_participant_name = p.get("name", "")
+                break
+        self.show_delete_participant_dialog = True
+
+    def close_delete_participant(self):
+        self.show_delete_participant_dialog = False
+        self.delete_participant_event_id = ""
+        self.delete_participant_name = ""
+
+    async def confirm_delete_participant(self):
+        """Delete a single participant after confirmation."""
+        cid = self.active_campaign_id
+        eid = self.delete_participant_event_id
+        if cid and eid:
+            await db_delete_participant(cid, eid)
+            self.show_delete_participant_dialog = False
+            self.delete_participant_event_id = ""
+            self.delete_participant_name = ""
+            await self._reload_participants()
+
+    def open_bulk_delete(self):
+        """Open confirmation dialog for bulk delete."""
+        if self.selected_ids:
+            self.show_bulk_delete_dialog = True
+
+    def close_bulk_delete(self):
+        self.show_bulk_delete_dialog = False
+
+    async def confirm_bulk_delete(self):
+        """Delete all selected participants after confirmation."""
+        cid = self.active_campaign_id
+        if cid and self.selected_ids:
+            await db_bulk_delete(cid, list(self.selected_ids))
+            self.selected_ids = []
+            self.show_bulk_delete_dialog = False
+            await self._reload_participants()
 
     # CAMPAIGN FORM
 

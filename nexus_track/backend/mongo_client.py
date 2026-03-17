@@ -424,6 +424,23 @@ async def add_manual_participant(
 # Bulk status update
 # =========================================================================
 
+async def delete_participant(campaign_id: str, event_id: str) -> None:
+    """Delete a single participant by campaign_id + google_event_id."""
+    await _participants().delete_one(
+        {"campaign_id": campaign_id, "google_event_id": event_id},
+    )
+
+
+async def bulk_delete_participants(
+    campaign_id: str, event_ids: list[str],
+) -> int:
+    """Delete multiple participants at once. Returns deleted count."""
+    result = await _participants().delete_many(
+        {"campaign_id": campaign_id, "google_event_id": {"$in": event_ids}},
+    )
+    return result.deleted_count
+
+
 async def bulk_update_participant_field(
     campaign_id: str,
     event_ids: list[str],

@@ -694,6 +694,16 @@ def _bulk_action_bar() -> rx.Component:
                     cursor="pointer",
                 ),
                 rx.button(
+                    rx.icon("trash-2", size=12),
+                    "Delete",
+                    size="1",
+                    variant="soft",
+                    color_scheme="red",
+                    border_radius=RADIUS_SM,
+                    on_click=NexusState.open_bulk_delete,
+                    cursor="pointer",
+                ),
+                rx.button(
                     "Clear",
                     size="1",
                     variant="ghost",
@@ -841,6 +851,77 @@ def _sort_header(label: str, field: str, width: str = "auto") -> rx.Component:
 # -----------------------------------------------------------------------
 # Delete dialog
 # -----------------------------------------------------------------------
+
+def _bulk_delete_dialog() -> rx.Component:
+    return rx.alert_dialog.root(
+        rx.alert_dialog.content(
+            rx.alert_dialog.title("Delete Participants"),
+            rx.alert_dialog.description(
+                "Are you sure you want to delete the selected participant(s)? "
+                "This action cannot be undone."
+            ),
+            rx.hstack(
+                rx.alert_dialog.cancel(
+                    rx.button(
+                        "Cancel",
+                        variant="soft",
+                        color_scheme="gray",
+                        on_click=NexusState.close_bulk_delete,
+                        cursor="pointer",
+                    ),
+                ),
+                rx.alert_dialog.action(
+                    rx.button(
+                        "Delete",
+                        color_scheme="red",
+                        on_click=NexusState.confirm_bulk_delete,
+                        cursor="pointer",
+                    ),
+                ),
+                spacing="3",
+                justify="end",
+                width="100%",
+                margin_top="16px",
+            ),
+        ),
+        open=NexusState.show_bulk_delete_dialog,
+    )
+
+
+def _delete_participant_dialog() -> rx.Component:
+    return rx.alert_dialog.root(
+        rx.alert_dialog.content(
+            rx.alert_dialog.title("Delete Participant"),
+            rx.alert_dialog.description(
+                "Are you sure you want to delete this participant? This action cannot be undone."
+            ),
+            rx.hstack(
+                rx.alert_dialog.cancel(
+                    rx.button(
+                        "Cancel",
+                        variant="soft",
+                        color_scheme="gray",
+                        on_click=NexusState.close_delete_participant,
+                        cursor="pointer",
+                    ),
+                ),
+                rx.alert_dialog.action(
+                    rx.button(
+                        "Delete",
+                        color_scheme="red",
+                        on_click=NexusState.confirm_delete_participant,
+                        cursor="pointer",
+                    ),
+                ),
+                spacing="3",
+                justify="end",
+                width="100%",
+                margin_top="16px",
+            ),
+        ),
+        open=NexusState.show_delete_participant_dialog,
+    )
+
 
 def _delete_dialog() -> rx.Component:
     return rx.alert_dialog.root(
@@ -993,7 +1074,11 @@ def campaign_detail_page() -> rx.Component:
         _bulk_action_bar(),
         # -- participant list
         _participant_list(),
-        # -- delete dialog
+        # -- bulk delete dialog
+        _bulk_delete_dialog(),
+        # -- delete participant dialog
+        _delete_participant_dialog(),
+        # -- delete campaign dialog
         _delete_dialog(),
         max_width=MAX_WIDTH,
         margin="0 auto",
