@@ -30,7 +30,7 @@ def campaign_card(campaign: dict) -> rx.Component:
     status = campaign["status"].to(str)
     today_total = campaign["today_total"].to(int)
     today_completed = campaign["today_completed"].to(int)
-    today_in_progress = campaign["today_in_progress"].to(int)
+    today_booked = campaign["today_booked"].to(int)
 
     # Overall progress (all dates, goal-based)
     goal = campaign["goal"].to(int)
@@ -142,14 +142,14 @@ def campaign_card(campaign: dict) -> rx.Component:
                         background=ACCENT_SOFT,
                     ),
                     rx.cond(
-                        today_in_progress > 0,
+                        today_booked > 0,
                         rx.hstack(
                             rx.box(
                                 width="5px", height="5px",
                                 border_radius="50%", bg=AMBER,
                             ),
                             rx.text(
-                                today_in_progress, " active",
+                                today_booked, " booked",
                                 size="1", color=AMBER,
                             ),
                             spacing="1", align="center",

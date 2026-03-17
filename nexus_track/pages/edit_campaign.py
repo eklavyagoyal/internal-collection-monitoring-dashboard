@@ -200,7 +200,8 @@ def edit_campaign_page() -> rx.Component:
                         lambda p: rx.hstack(
                             rx.text(p, size="2", weight="medium", color=HEADING, min_width="90px"),
                             rx.el.input(
-                                type="number",
+                                type="text",
+                                input_mode="numeric",
                                 placeholder="No limit",
                                 default_value=NexusState.form_device_quota[p].to(str),
                                 on_blur=lambda v: NexusState.set_form_device_quota_value(p + ":" + v),

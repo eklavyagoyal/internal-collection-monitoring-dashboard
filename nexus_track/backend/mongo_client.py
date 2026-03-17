@@ -23,7 +23,7 @@ _client: AsyncIOMotorClient | None = None
 # Default label sets shipped with a fresh install.
 DEFAULT_PLATFORMS = ["Orb", "Kiosk-v1", "Kiosk-v2", "Self-Serve", "Other"]
 DEFAULT_MODEL_TAGS = ["v4.5", "v4.6", "v5.0", "beta"]
-DEFAULT_STATUSES = ["Pending", "In-Progress", "Completed"]
+DEFAULT_STATUSES = ["Booked", "Completed"]
 DEFAULT_DEVICE_TYPES = ["iOS", "Android", "Orb", "Multi-device"]
 
 
@@ -75,6 +75,12 @@ async def ensure_indexes() -> None:
         [("campaign_id", 1), ("status", 1)],
     )
     await _participants().create_index("email")
+
+    # Migrate legacy statuses to new model
+    await _participants().update_many(
+        {"status": {"$in": ["Pending", "In-Progress"]}},
+        {"$set": {"status": "Booked"}},
+    )
 
 
 # =========================================================================
@@ -331,11 +337,9 @@ async def get_all_campaigns_with_stats(
         parts = await get_participants_for_campaign(cid, date)
         total = len(parts)
         completed = sum(1 for p in parts if p.get("status") == "Completed")
-        in_prog = sum(1 for p in parts if p.get("status") == "In-Progress")
         c["today_total"] = total
         c["today_completed"] = completed
-        c["today_in_progress"] = in_prog
-        c["today_pending"] = total - completed - in_prog
+        c["today_booked"] = total - completed
         c["today_progress"] = int(completed / total * 100) if total else 0
 
         # Overall progress across all dates
@@ -367,7 +371,7 @@ async def upsert_participant(
                 "campaign_id": campaign_id,
                 "google_event_id": event_id,
                 "platform": "", "model_tag": "",
-                "status": "Pending", "notes": "",
+                "status": "Booked", "notes": "",
                 "issue_comment": "",
                 "start_time": None, "end_time": None,
                 "created_at": now,
@@ -416,12 +420,9 @@ async def update_participant_status(
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
     update: dict[str, Any] = {"status": new_status, "updated_at": now}
-    if new_status == "In-Progress":
-        update["start_time"] = now
-    elif new_status == "Completed":
+    if new_status == "Completed":
         update["end_time"] = now
-    elif new_status == "Pending":
-        update["start_time"] = None
+    elif new_status == "Booked":
         update["end_time"] = None
     await _participants().update_one(
         {"campaign_id": campaign_id, "google_event_id": event_id},
@@ -455,7 +456,7 @@ async def add_manual_participant(
         "appointment_date": appointment_date,
         "platform": "",
         "model_tag": "",
-        "status": "Pending",
+        "status": "Booked",
         "notes": "",
         "issue_comment": "",
         "start_time": None,

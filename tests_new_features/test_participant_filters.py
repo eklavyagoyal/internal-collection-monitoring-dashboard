@@ -50,10 +50,10 @@ PARTICIPANTS = [
     {"name": "Alice", "email": "a@t.co", "platform": "iOS", "status": "Completed",
      "appointment_date": "2025-01-01", "appointment_time": "10:00",
      "model_tag": "v5.0", "notes": "", "issue_comment": ""},
-    {"name": "Bob", "email": "b@t.co", "platform": "Android", "status": "Pending",
+    {"name": "Bob", "email": "b@t.co", "platform": "Android", "status": "Booked",
      "appointment_date": "2025-01-01", "appointment_time": "11:00",
      "model_tag": "v4.6", "notes": "test note", "issue_comment": "bug found"},
-    {"name": "Charlie", "email": "c@t.co", "platform": "iOS", "status": "In-Progress",
+    {"name": "Charlie", "email": "c@t.co", "platform": "iOS", "status": "Booked",
      "appointment_date": "2025-01-02", "appointment_time": "09:00",
      "model_tag": "v5.0", "notes": "", "issue_comment": ""},
     {"name": "Diana", "email": "d@t.co", "platform": "Orb", "status": "Completed",
@@ -84,9 +84,9 @@ class TestStatusFilter:
         assert len(result) == 2
         assert all(p["status"] == "Completed" for p in result)
 
-    def test_filter_pending(self):
-        result = _filter_participants(PARTICIPANTS, filter_status="Pending")
-        assert len(result) == 1
+    def test_filter_booked(self):
+        result = _filter_participants(PARTICIPANTS, filter_status="Booked")
+        assert len(result) == 2
 
 
 class TestDateFilter:
@@ -151,7 +151,7 @@ class TestStackedFilters:
         result = _filter_participants(
             PARTICIPANTS,
             filter_platform="Orb",
-            filter_status="Pending",
+            filter_status="Booked",
         )
         assert len(result) == 0
 

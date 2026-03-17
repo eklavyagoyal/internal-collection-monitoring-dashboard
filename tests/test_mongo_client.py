@@ -191,15 +191,18 @@ class TestParticipantCRUD:
         await mc.upsert_participant(
             cid, "evt-5", "Frank", "f@t.com", "14:00", "2024-06-15",
         )
-        await mc.update_participant_status(cid, "evt-5", "In-Progress")
         p = (await mc.get_participants_for_campaign(cid, "2024-06-15"))[0]
-        assert p["status"] == "In-Progress"
-        assert p["start_time"] is not None
+        assert p["status"] == "Booked"
 
         await mc.update_participant_status(cid, "evt-5", "Completed")
         p = (await mc.get_participants_for_campaign(cid, "2024-06-15"))[0]
         assert p["status"] == "Completed"
         assert p["end_time"] is not None
+
+        await mc.update_participant_status(cid, "evt-5", "Booked")
+        p = (await mc.get_participants_for_campaign(cid, "2024-06-15"))[0]
+        assert p["status"] == "Booked"
+        assert p["end_time"] is None
 
 
 class TestManualParticipant:
@@ -212,7 +215,7 @@ class TestManualParticipant:
         parts = await mc.get_participants_for_campaign(cid, "2024-06-15")
         assert len(parts) == 1
         assert parts[0]["issue_comment"] == ""
-        assert parts[0]["status"] == "Pending"
+        assert parts[0]["status"] == "Booked"
 
 
 # ---------------------------------------------------------------------------

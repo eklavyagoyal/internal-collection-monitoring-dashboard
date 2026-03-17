@@ -37,11 +37,7 @@ class TestParticipantIndicatorData:
         await mc.upsert_participant(cid, "e1", "Bob", "b@t.com", "11:00", "2024-06-15")
 
         p = (await mc.get_participants_for_campaign(cid, "2024-06-15"))[0]
-        assert p["status"] == "Pending"
-
-        await mc.update_participant_status(cid, "e1", "In-Progress")
-        p = (await mc.get_participants_for_campaign(cid, "2024-06-15"))[0]
-        assert p["status"] == "In-Progress"
+        assert p["status"] == "Booked"
 
         await mc.update_participant_status(cid, "e1", "Completed")
         p = (await mc.get_participants_for_campaign(cid, "2024-06-15"))[0]

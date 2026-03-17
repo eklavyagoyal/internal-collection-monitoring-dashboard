@@ -382,13 +382,13 @@ def status_dot(status, size: str = "8px") -> rx.Component:
         bg=rx.match(
             status,
             ("Completed", GREEN),
-            ("In-Progress", AMBER),
+            ("Booked", AMBER),
             "#cbd5e1",
         ),
         box_shadow=rx.match(
             status,
             ("Completed", f"0 0 6px rgba(34,197,94,0.35)"),
-            ("In-Progress", f"0 0 6px rgba(245,158,11,0.35)"),
+            ("Booked", f"0 0 6px rgba(245,158,11,0.35)"),
             "none",
         ),
     )

@@ -385,8 +385,7 @@ def _stats_and_progress() -> rx.Component:
     return rx.vstack(
         # Stat pills
         rx.hstack(
-            _stat_pill("Pending", NexusState.pending_count, AMBER, AMBER_SOFT),
-            _stat_pill("Active", NexusState.in_progress_count, ACCENT, ACCENT_SOFT),
+            _stat_pill("Booked", NexusState.booked_count, AMBER, AMBER_SOFT),
             _stat_pill("Done", NexusState.completed_count, GREEN, GREEN_SOFT),
             rx.spacer(),
             rx.text(
@@ -432,13 +431,12 @@ def _participant_filter_bar() -> rx.Component:
             # Status chips
             rx.text("Status:", size="1", weight="medium", color=SUBTEXT),
             _filter_chip("All", NexusState.filter_status == "", NexusState.set_filter_status("")),
-            _filter_chip("Pending", NexusState.filter_status == "Pending", NexusState.set_filter_status("Pending")),
-            _filter_chip("In-Progress", NexusState.filter_status == "In-Progress", NexusState.set_filter_status("In-Progress")),
+            _filter_chip("Booked", NexusState.filter_status == "Booked", NexusState.set_filter_status("Booked")),
             _filter_chip("Completed", NexusState.filter_status == "Completed", NexusState.set_filter_status("Completed")),
             rx.box(width="1px", height="20px", background=BORDER_SUBTLE),
             # Platform filter
             rx.select(
-                [""] + NexusState.platforms,
+                NexusState.platforms,
                 value=NexusState.filter_platform,
                 on_change=NexusState.set_filter_platform,
                 placeholder="Platform",
@@ -447,7 +445,7 @@ def _participant_filter_bar() -> rx.Component:
             ),
             # Date filter
             rx.select(
-                [""] + NexusState.participant_dates,
+                NexusState.participant_dates,
                 value=NexusState.filter_date,
                 on_change=NexusState.set_filter_date,
                 placeholder="Date",
@@ -735,12 +733,12 @@ def _bulk_action_bar() -> rx.Component:
                     cursor="pointer",
                 ),
                 rx.button(
-                    "Mark In-Progress",
+                    "Mark Booked",
                     size="1",
                     variant="soft",
-                    color_scheme="orange",
+                    color_scheme="amber",
                     border_radius=RADIUS_SM,
-                    on_click=NexusState.bulk_set_status("In-Progress"),
+                    on_click=NexusState.bulk_set_status("Booked"),
                     cursor="pointer",
                 ),
                 rx.button(
@@ -1017,20 +1015,33 @@ def _participant_list() -> rx.Component:
     return rx.cond(
         NexusState.total_count > 0,
         rx.vstack(
+            # ── Bookings section ──
+            rx.hstack(
+                rx.icon("calendar", size=16, color=AMBER),
+                rx.text(
+                    "Bookings",
+                    size="3",
+                    weight="bold",
+                    color=HEADING,
+                ),
+                rx.badge(
+                    NexusState.booked_count.to(str),
+                    color_scheme="amber",
+                    size="1",
+                    variant="soft",
+                ),
+                spacing="2",
+                align="center",
+                width="100%",
+                padding_x="4px",
+            ),
             # column header with sort
             rx.hstack(
-                rx.checkbox(
-                    checked=NexusState.all_selected,
-                    on_change=lambda _v: NexusState.select_all(),
-                    size="1",
-                    color_scheme="iris",
-                    cursor="pointer",
-                ),
+                rx.box(width="24px", flex_shrink="0"),  # checkbox spacer
                 _sort_header("Date / Time", "appointment_time", width="110px"),
                 _sort_header("Participant", "name"),
                 rx.text("Platform", size="1", weight="bold", width="130px", color=SUBTEXT),
                 rx.text("Model", size="1", weight="bold", width="110px", color=SUBTEXT),
-                _sort_header("Status", "status", width="130px"),
                 rx.text("Notes", size="1", weight="bold", width="180px", color=SUBTEXT),
                 padding_x="16px",
                 padding_y="6px",
@@ -1039,9 +1050,56 @@ def _participant_list() -> rx.Component:
                 spacing="3",
                 align="center",
             ),
-            rx.foreach(
-                NexusState.sorted_filtered_participants,
-                participant_row,
+            rx.cond(
+                NexusState.booked_count > 0,
+                rx.vstack(
+                    rx.foreach(
+                        NexusState.booked_participants,
+                        participant_row,
+                    ),
+                    spacing="2",
+                    width="100%",
+                ),
+                rx.center(
+                    rx.text("All participants completed!", size="2", color=SUBTEXT),
+                    padding_y="20px",
+                ),
+            ),
+            # ── Completed section ──
+            rx.box(height="24px"),
+            rx.hstack(
+                rx.icon("check-circle-2", size=16, color=GREEN),
+                rx.text(
+                    "Completed",
+                    size="3",
+                    weight="bold",
+                    color=HEADING,
+                ),
+                rx.badge(
+                    NexusState.completed_count.to(str),
+                    color_scheme="green",
+                    size="1",
+                    variant="soft",
+                ),
+                spacing="2",
+                align="center",
+                width="100%",
+                padding_x="4px",
+            ),
+            rx.cond(
+                NexusState.completed_count > 0,
+                rx.vstack(
+                    rx.foreach(
+                        NexusState.completed_participants,
+                        participant_row,
+                    ),
+                    spacing="2",
+                    width="100%",
+                ),
+                rx.center(
+                    rx.text("No completed participants yet", size="2", color=SUBTEXT),
+                    padding_y="20px",
+                ),
             ),
             spacing="2",
             width="100%",

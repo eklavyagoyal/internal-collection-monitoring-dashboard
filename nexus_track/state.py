@@ -55,7 +55,7 @@ class NexusState(rx.State):
     # SETTINGS / LABELS
     platforms: list[str] = ["Orb", "Kiosk-v1", "Kiosk-v2", "Self-Serve", "Other"]
     model_tags: list[str] = ["v4.5", "v4.6", "v5.0", "beta"]
-    statuses: list[str] = ["Pending", "In-Progress", "Completed"]
+    statuses: list[str] = ["Booked", "Completed"]
 
     new_platform: str = ""
     new_model_tag: str = ""
@@ -165,12 +165,8 @@ class NexusState(rx.State):
         return sum(1 for p in self.participants if p.get("status") == "Completed")
 
     @rx.var(cache=True)
-    def in_progress_count(self) -> int:
-        return sum(1 for p in self.participants if p.get("status") == "In-Progress")
-
-    @rx.var(cache=True)
-    def pending_count(self) -> int:
-        return sum(1 for p in self.participants if p.get("status") == "Pending")
+    def booked_count(self) -> int:
+        return sum(1 for p in self.participants if p.get("status") != "Completed")
 
     @rx.var(cache=True)
     def progress_pct(self) -> int:
@@ -221,6 +217,16 @@ class NexusState(rx.State):
     @rx.var(cache=True)
     def filtered_participants(self) -> list[dict]:
         return self.sorted_filtered_participants
+
+    @rx.var(cache=True)
+    def booked_participants(self) -> list[dict]:
+        """Filtered participants that are NOT completed, sorted by date."""
+        return [p for p in self.sorted_filtered_participants if p.get("status") != "Completed"]
+
+    @rx.var(cache=True)
+    def completed_participants(self) -> list[dict]:
+        """Filtered participants that ARE completed, sorted by date."""
+        return [p for p in self.sorted_filtered_participants if p.get("status") == "Completed"]
 
     @rx.var(cache=True)
     def selection_count(self) -> int:
@@ -883,6 +889,18 @@ class NexusState(rx.State):
         if cid:
             await db_update_status(cid, event_id, new_status)
             await self._reload_participants()
+
+    async def toggle_completed(self, event_id: str):
+        """Toggle a participant between Booked and Completed."""
+        cid = self.active_campaign_id
+        if not cid:
+            return
+        for p in self.participants:
+            if p.get("google_event_id") == event_id:
+                new_status = "Booked" if p.get("status") == "Completed" else "Completed"
+                await db_update_status(cid, event_id, new_status)
+                break
+        await self._reload_participants()
 
     async def set_notes(self, event_id: str, notes: str):
         cid = self.active_campaign_id
