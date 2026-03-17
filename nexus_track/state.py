@@ -95,6 +95,10 @@ class NexusState(rx.State):
     sort_field: str = "appointment_time"
     sort_dir: str = "asc"
 
+    # SECTION COLLAPSE
+    bookings_collapsed: bool = False
+    completed_collapsed: bool = True
+
     # PARTICIPANT FILTERS
     filter_platform: str = ""
     filter_status: str = ""

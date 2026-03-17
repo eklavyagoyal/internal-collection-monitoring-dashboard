@@ -1017,6 +1017,10 @@ def _participant_list() -> rx.Component:
         rx.vstack(
             # ── Bookings section ──
             rx.hstack(
+                rx.icon(
+                    rx.cond(NexusState.bookings_collapsed, "chevron-right", "chevron-down"),
+                    size=16, color=SUBTEXT,
+                ),
                 rx.icon("calendar", size=16, color=AMBER),
                 rx.text(
                     "Bookings",
@@ -1034,40 +1038,54 @@ def _participant_list() -> rx.Component:
                 align="center",
                 width="100%",
                 padding_x="4px",
-            ),
-            # column header with sort
-            rx.hstack(
-                rx.box(width="24px", flex_shrink="0"),  # checkbox spacer
-                _sort_header("Date / Time", "appointment_time", width="110px"),
-                _sort_header("Participant", "name"),
-                rx.text("Platform", size="1", weight="bold", width="130px", color=SUBTEXT),
-                rx.text("Model", size="1", weight="bold", width="110px", color=SUBTEXT),
-                rx.text("Notes", size="1", weight="bold", width="180px", color=SUBTEXT),
-                padding_x="16px",
-                padding_y="6px",
-                width="100%",
-                display=["none", "none", "none", "flex"],
-                spacing="3",
-                align="center",
+                cursor="pointer",
+                on_click=NexusState.set_bookings_collapsed(~NexusState.bookings_collapsed),
+                _hover={"opacity": "0.7"},
             ),
             rx.cond(
-                NexusState.booked_count > 0,
+                ~NexusState.bookings_collapsed,
                 rx.vstack(
-                    rx.foreach(
-                        NexusState.booked_participants,
-                        participant_row,
+                    # column header with sort
+                    rx.hstack(
+                        rx.box(width="24px", flex_shrink="0"),  # checkbox spacer
+                        _sort_header("Date / Time", "appointment_time", width="110px"),
+                        _sort_header("Participant", "name"),
+                        rx.text("Platform", size="1", weight="bold", width="130px", color=SUBTEXT),
+                        rx.text("Model", size="1", weight="bold", width="110px", color=SUBTEXT),
+                        rx.text("Notes", size="1", weight="bold", width="180px", color=SUBTEXT),
+                        padding_x="16px",
+                        padding_y="6px",
+                        width="100%",
+                        display=["none", "none", "none", "flex"],
+                        spacing="3",
+                        align="center",
+                    ),
+                    rx.cond(
+                        NexusState.booked_count > 0,
+                        rx.vstack(
+                            rx.foreach(
+                                NexusState.booked_participants,
+                                participant_row,
+                            ),
+                            spacing="2",
+                            width="100%",
+                        ),
+                        rx.center(
+                            rx.text("All participants completed!", size="2", color=SUBTEXT),
+                            padding_y="20px",
+                        ),
                     ),
                     spacing="2",
                     width="100%",
-                ),
-                rx.center(
-                    rx.text("All participants completed!", size="2", color=SUBTEXT),
-                    padding_y="20px",
                 ),
             ),
             # ── Completed section ──
             rx.box(height="24px"),
             rx.hstack(
+                rx.icon(
+                    rx.cond(NexusState.completed_collapsed, "chevron-right", "chevron-down"),
+                    size=16, color=SUBTEXT,
+                ),
                 rx.icon("check-circle-2", size=16, color=GREEN),
                 rx.text(
                     "Completed",
@@ -1085,20 +1103,26 @@ def _participant_list() -> rx.Component:
                 align="center",
                 width="100%",
                 padding_x="4px",
+                cursor="pointer",
+                on_click=NexusState.set_completed_collapsed(~NexusState.completed_collapsed),
+                _hover={"opacity": "0.7"},
             ),
             rx.cond(
-                NexusState.completed_count > 0,
-                rx.vstack(
-                    rx.foreach(
-                        NexusState.completed_participants,
-                        participant_row,
+                ~NexusState.completed_collapsed,
+                rx.cond(
+                    NexusState.completed_count > 0,
+                    rx.vstack(
+                        rx.foreach(
+                            NexusState.completed_participants,
+                            participant_row,
+                        ),
+                        spacing="2",
+                        width="100%",
                     ),
-                    spacing="2",
-                    width="100%",
-                ),
-                rx.center(
-                    rx.text("No completed participants yet", size="2", color=SUBTEXT),
-                    padding_y="20px",
+                    rx.center(
+                        rx.text("No completed participants yet", size="2", color=SUBTEXT),
+                        padding_y="20px",
+                    ),
                 ),
             ),
             spacing="2",
