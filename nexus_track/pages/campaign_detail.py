@@ -383,13 +383,13 @@ def _campaign_header() -> rx.Component:
 
 def _stats_and_progress() -> rx.Component:
     return rx.vstack(
-        # Stat pills
+        # Stat pills — use same deduplicated counts as the progress bar
         rx.hstack(
-            _stat_pill("Booked", NexusState.booked_count, AMBER, AMBER_SOFT),
-            _stat_pill("Done", NexusState.completed_count, GREEN, GREEN_SOFT),
+            _stat_pill("Booked", NexusState.campaign_booked, AMBER, AMBER_SOFT),
+            _stat_pill("Done", NexusState.campaign_completed_all, GREEN, GREEN_SOFT),
             rx.spacer(),
             rx.text(
-                NexusState.total_count.to(str) + " total",
+                NexusState.campaign_booked.to(str) + " total",
                 size="2",
                 weight="medium",
                 color=SUBTEXT,
