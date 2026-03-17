@@ -6,8 +6,10 @@ from .design_tokens import (
     ACCENT,
     ACCENT_GRADIENT,
     ACCENT_SOFT,
+    AMBER,
     BG,
     BORDER,
+    GREEN,
     HEADING,
     RADIUS_MD,
     RADIUS_SM,
@@ -16,6 +18,7 @@ from .design_tokens import (
     TRANSITION_FAST,
     ghost_icon_btn,
 )
+from ..state import NexusState
 
 
 def navbar(breadcrumb: str = "") -> rx.Component:
@@ -79,6 +82,24 @@ def navbar(breadcrumb: str = "") -> rx.Component:
             rx.spacer(),
             # -- Right controls
             rx.hstack(
+                # Admin badge
+                rx.cond(
+                    NexusState.admin_mode,
+                    rx.hstack(
+                        rx.box(
+                            width="6px", height="6px",
+                            border_radius="50%", bg=AMBER,
+                        ),
+                        rx.text(
+                            "Admin", size="1", weight="medium",
+                            color=AMBER,
+                        ),
+                        spacing="2", align="center",
+                        cursor="pointer",
+                        on_click=NexusState.logout_admin,
+                        title="Click to logout",
+                    ),
+                ),
                 # Live indicator
                 rx.hstack(
                     rx.box(

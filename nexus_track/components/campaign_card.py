@@ -30,12 +30,13 @@ def campaign_card(campaign: dict) -> rx.Component:
     status = campaign["status"].to(str)
     today_total = campaign["today_total"].to(int)
     today_completed = campaign["today_completed"].to(int)
-    today_in_progress = campaign["today_in_progress"].to(int)
+    today_booked = campaign["today_booked"].to(int)
 
     # Overall progress (all dates, goal-based)
     goal = campaign["goal"].to(int)
     booked = campaign["booked"].to(int)
     completed_all = campaign["completed_all"].to(int)
+    device_type = campaign["device_type"].to(str)
 
     booked_pct = rx.cond(goal > 0, (booked * 100 / goal).to(int), 0)
     completed_pct = rx.cond(goal > 0, (completed_all * 100 / goal).to(int), 0)
@@ -51,9 +52,18 @@ def campaign_card(campaign: dict) -> rx.Component:
                 opacity="0.7",
             ),
             rx.vstack(
-                # -- Top: status + goal fraction
+                # -- Top: status + device type + goal fraction
                 rx.hstack(
                     campaign_status_indicator(status),
+                    rx.cond(
+                        device_type != "",
+                        rx.badge(
+                            device_type,
+                            size="1",
+                            variant="soft",
+                            color_scheme="blue",
+                        ),
+                    ),
                     rx.spacer(),
                     rx.hstack(
                         rx.text(
@@ -132,14 +142,14 @@ def campaign_card(campaign: dict) -> rx.Component:
                         background=ACCENT_SOFT,
                     ),
                     rx.cond(
-                        today_in_progress > 0,
+                        today_booked > 0,
                         rx.hstack(
                             rx.box(
                                 width="5px", height="5px",
                                 border_radius="50%", bg=AMBER,
                             ),
                             rx.text(
-                                today_in_progress, " active",
+                                today_booked, " booked",
                                 size="1", color=AMBER,
                             ),
                             spacing="1", align="center",

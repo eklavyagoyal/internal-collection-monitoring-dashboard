@@ -7,6 +7,7 @@ multi-calendar support, sorting, bulk actions, search, archive,
 manual participant add, and CSV export.
 """
 
+import hashlib
 import asyncio
 import csv
 import io
@@ -21,16 +22,20 @@ from .backend.mongo_client import (
     archive_campaign as db_archive_campaign,
     bulk_delete_participants as db_bulk_delete,
     bulk_update_participant_field as db_bulk_update,
+    clone_campaign as db_clone_campaign,
     create_campaign as db_create_campaign,
     delete_campaign as db_delete_campaign,
     delete_participant as db_delete_participant,
     ensure_indexes,
+    get_admin_pin_hash,
     get_all_campaigns_with_stats,
     get_campaign,
     get_campaign_progress,
     get_participants_for_campaign,
     get_participants_for_export,
+    get_per_device_progress,
     get_settings,
+    set_admin_pin as db_set_admin_pin,
     unarchive_campaign as db_unarchive_campaign,
     update_campaign as db_update_campaign,
     update_campaign_field as db_update_campaign_field,
@@ -50,7 +55,7 @@ class NexusState(rx.State):
     # SETTINGS / LABELS
     platforms: list[str] = ["Orb", "Kiosk-v1", "Kiosk-v2", "Self-Serve", "Other"]
     model_tags: list[str] = ["v4.5", "v4.6", "v5.0", "beta"]
-    statuses: list[str] = ["Pending", "In-Progress", "Completed"]
+    statuses: list[str] = ["Booked", "Completed"]
 
     new_platform: str = ""
     new_model_tag: str = ""
@@ -59,6 +64,13 @@ class NexusState(rx.State):
     available_calendars: list[dict] = []
     calendars_loading: bool = False
 
+    # ADMIN MODE
+    admin_mode: bool = False
+    admin_pin_input: str = ""
+    admin_error: str = ""
+    has_admin_pin: bool = False
+    new_admin_pin: str = ""
+
     # LOADING STATE
     is_loading: bool = False
 
@@ -66,6 +78,8 @@ class NexusState(rx.State):
     campaigns: list[dict] = []
     campaign_search_query: str = ""
     show_archived: bool = False
+    campaign_device_filter: str = ""
+    campaign_sort_field: str = "created_at"
 
     # DATE NAVIGATION
     selected_date: str = ""
@@ -75,10 +89,21 @@ class NexusState(rx.State):
     active_campaign_id: str = ""
     participants: list[dict] = []
     search_query: str = ""
+    per_device_stats: dict = {}
 
     # SORTING
     sort_field: str = "appointment_time"
     sort_dir: str = "asc"
+
+    # SECTION COLLAPSE
+    bookings_collapsed: bool = False
+    completed_collapsed: bool = True
+
+    # PARTICIPANT FILTERS
+    filter_platform: str = ""
+    filter_status: str = ""
+    filter_date: str = ""
+    filter_has_issue: bool = False
 
     # BULK SELECTION
     selected_ids: list[str] = []
@@ -107,6 +132,8 @@ class NexusState(rx.State):
     form_error: str = ""
     form_is_edit: bool = False
     form_edit_campaign_id: str = ""
+    form_device_type: str = "Multi-device"
+    form_device_quota: dict = {}
 
     # ISSUE TRACKING
     editing_issue_event_id: str = ""
@@ -142,12 +169,8 @@ class NexusState(rx.State):
         return sum(1 for p in self.participants if p.get("status") == "Completed")
 
     @rx.var(cache=True)
-    def in_progress_count(self) -> int:
-        return sum(1 for p in self.participants if p.get("status") == "In-Progress")
-
-    @rx.var(cache=True)
-    def pending_count(self) -> int:
-        return sum(1 for p in self.participants if p.get("status") == "Pending")
+    def booked_count(self) -> int:
+        return sum(1 for p in self.participants if p.get("status") != "Completed")
 
     @rx.var(cache=True)
     def progress_pct(self) -> int:
@@ -157,6 +180,8 @@ class NexusState(rx.State):
     @rx.var(cache=True)
     def sorted_filtered_participants(self) -> list[dict]:
         items = self.participants
+
+        # Text search
         if self.search_query:
             q = self.search_query.lower()
             items = [
@@ -167,6 +192,24 @@ class NexusState(rx.State):
                 or q in p.get("model_tag", "").lower()
                 or q in p.get("notes", "").lower()
             ]
+
+        # Platform filter
+        if self.filter_platform:
+            items = [p for p in items if p.get("platform", "") == self.filter_platform]
+
+        # Status filter
+        if self.filter_status:
+            items = [p for p in items if p.get("status", "") == self.filter_status]
+
+        # Date filter
+        if self.filter_date:
+            items = [p for p in items if p.get("appointment_date", "") == self.filter_date]
+
+        # Issue filter
+        if self.filter_has_issue:
+            items = [p for p in items if p.get("issue_comment", "").strip()]
+
+        # Sort
         field = self.sort_field or "appointment_time"
         reverse = self.sort_dir == "desc"
         try:
@@ -178,6 +221,16 @@ class NexusState(rx.State):
     @rx.var(cache=True)
     def filtered_participants(self) -> list[dict]:
         return self.sorted_filtered_participants
+
+    @rx.var(cache=True)
+    def booked_participants(self) -> list[dict]:
+        """Filtered participants that are NOT completed, sorted by date."""
+        return [p for p in self.sorted_filtered_participants if p.get("status") != "Completed"]
+
+    @rx.var(cache=True)
+    def completed_participants(self) -> list[dict]:
+        """Filtered participants that ARE completed, sorted by date."""
+        return [p for p in self.sorted_filtered_participants if p.get("status") == "Completed"]
 
     @rx.var(cache=True)
     def selection_count(self) -> int:
@@ -282,6 +335,33 @@ class NexusState(rx.State):
         return self.current_campaign.get("status", "active")
 
     @rx.var(cache=True)
+    def campaign_device_type(self) -> str:
+        return self.current_campaign.get("device_type", "Multi-device")
+
+    @rx.var(cache=True)
+    def campaign_device_quota(self) -> dict:
+        return self.current_campaign.get("device_quota", {})
+
+    @rx.var(cache=True)
+    def active_filter_count(self) -> int:
+        count = 0
+        if self.filter_platform:
+            count += 1
+        if self.filter_status:
+            count += 1
+        if self.filter_date:
+            count += 1
+        if self.filter_has_issue:
+            count += 1
+        return count
+
+    @rx.var(cache=True)
+    def participant_dates(self) -> list[str]:
+        """Distinct appointment dates from loaded participants."""
+        dates = sorted({p.get("appointment_date", "") for p in self.participants if p.get("appointment_date")})
+        return dates
+
+    @rx.var(cache=True)
     def campaign_created_at(self) -> str:
         raw = self.current_campaign.get("created_at", "")
         if not raw:
@@ -312,14 +392,39 @@ class NexusState(rx.State):
 
     @rx.var(cache=True)
     def filtered_campaigns(self) -> list[dict]:
-        if not self.campaign_search_query:
-            return self.campaigns
-        q = self.campaign_search_query.lower()
-        return [
-            c for c in self.campaigns
-            if q in c.get("name", "").lower()
-            or q in c.get("description", "").lower()
-        ]
+        items = self.campaigns
+
+        # Text search
+        if self.campaign_search_query:
+            q = self.campaign_search_query.lower()
+            items = [
+                c for c in items
+                if q in c.get("name", "").lower()
+                or q in c.get("description", "").lower()
+            ]
+
+        # Device type filter
+        if self.campaign_device_filter:
+            items = [
+                c for c in items
+                if c.get("device_type", "Multi-device") == self.campaign_device_filter
+            ]
+
+        # Sort
+        sf = self.campaign_sort_field
+        if sf == "name":
+            items = sorted(items, key=lambda c: c.get("name", "").lower())
+        elif sf == "device_type":
+            items = sorted(items, key=lambda c: c.get("device_type", ""))
+        elif sf == "progress":
+            items = sorted(
+                items,
+                key=lambda c: c.get("completed_all", 0) / max(c.get("goal", 1), 1),
+                reverse=True,
+            )
+        # default: created_at (already sorted from DB)
+
+        return items
 
     @rx.var(cache=True)
     def display_date_label(self) -> str:
@@ -357,6 +462,7 @@ class NexusState(rx.State):
         self.platforms = doc.get("platforms", self.platforms)
         self.model_tags = doc.get("model_tags", self.model_tags)
         self.statuses = doc.get("statuses", self.statuses)
+        self.has_admin_pin = bool(doc.get("admin_pin_hash", ""))
 
     def set_new_platform(self, v: str):
         self.new_platform = v
@@ -413,6 +519,81 @@ class NexusState(rx.State):
             log.exception("Failed to list calendars")
             async with self:
                 self.calendars_loading = False
+
+    # ADMIN MODE
+
+    def set_admin_pin_input(self, v: str):
+        self.admin_pin_input = v
+        self.admin_error = ""
+
+    def set_new_admin_pin(self, v: str):
+        self.new_admin_pin = v
+
+    async def login_admin(self):
+        pin = self.admin_pin_input.strip()
+        if not pin:
+            self.admin_error = "Enter a PIN."
+            return
+        stored = await get_admin_pin_hash()
+        if not stored:
+            # No PIN set — first-time setup, accept any PIN
+            self.admin_mode = True
+            self.admin_error = ""
+            self.admin_pin_input = ""
+            return
+        pin_hash = hashlib.sha256(pin.encode()).hexdigest()
+        if pin_hash == stored:
+            self.admin_mode = True
+            self.admin_error = ""
+            self.admin_pin_input = ""
+        else:
+            self.admin_error = "Incorrect PIN."
+            self.admin_pin_input = ""
+
+    async def set_admin_pin_value(self):
+        pin = self.new_admin_pin.strip()
+        if len(pin) < 4:
+            self.admin_error = "PIN must be at least 4 characters."
+            return
+        pin_hash = hashlib.sha256(pin.encode()).hexdigest()
+        await db_set_admin_pin(pin_hash)
+        self.has_admin_pin = True
+        self.new_admin_pin = ""
+        self.admin_error = ""
+
+    def logout_admin(self):
+        self.admin_mode = False
+        self.admin_pin_input = ""
+        self.admin_error = ""
+
+    # DASHBOARD FILTERS
+
+    def set_campaign_device_filter(self, v: str):
+        self.campaign_device_filter = v
+
+    def set_campaign_sort_field(self, v: str):
+        self.campaign_sort_field = v
+
+    # PARTICIPANT FILTERS
+
+    def set_filter_platform(self, v: str):
+        self.filter_platform = v
+
+    def set_filter_status(self, v: str):
+        self.filter_status = v
+
+    def set_filter_date(self, v: str):
+        self.filter_date = v
+
+    def toggle_filter_has_issue(self):
+        self.filter_has_issue = not self.filter_has_issue
+
+    def clear_all_filters(self):
+        self.filter_platform = ""
+        self.filter_status = ""
+        self.filter_date = ""
+        self.filter_has_issue = False
+        self.search_query = ""
 
     # DATE NAVIGATION
 
@@ -479,6 +660,11 @@ class NexusState(rx.State):
         self.selected_ids = []
         self.sort_field = "appointment_time"
         self.sort_dir = "asc"
+        # Reset participant filters
+        self.filter_platform = ""
+        self.filter_status = ""
+        self.filter_date = ""
+        self.filter_has_issue = False
         if not self.selected_date:
             self.selected_date = datetime.now().strftime("%Y-%m-%d")
         if cid:
@@ -491,9 +677,11 @@ class NexusState(rx.State):
                 campaign["completed_all"] = progress["completed"]
                 self.current_campaign = campaign
                 self.participants = await get_participants_for_campaign(cid)
+                self.per_device_stats = await get_per_device_progress(cid)
             else:
                 self.current_campaign = {}
                 self.participants = []
+                self.per_device_stats = {}
         self.is_loading = False
 
     # SORTING
@@ -706,6 +894,18 @@ class NexusState(rx.State):
             await db_update_status(cid, event_id, new_status)
             await self._reload_participants()
 
+    async def toggle_completed(self, event_id: str):
+        """Toggle a participant between Booked and Completed."""
+        cid = self.active_campaign_id
+        if not cid:
+            return
+        for p in self.participants:
+            if p.get("google_event_id") == event_id:
+                new_status = "Booked" if p.get("status") == "Completed" else "Completed"
+                await db_update_status(cid, event_id, new_status)
+                break
+        await self._reload_participants()
+
     async def set_notes(self, event_id: str, notes: str):
         cid = self.active_campaign_id
         if cid:
@@ -909,6 +1109,22 @@ class NexusState(rx.State):
     def set_form_deadline(self, v: str):
         self.form_deadline = v
 
+    def set_form_device_type(self, v: str):
+        self.form_device_type = v
+
+    def set_form_device_quota_value(self, key_value: str):
+        """Set a single device quota entry. Format: 'device_name:quota_int'."""
+        parts = key_value.split(":", 1)
+        if len(parts) == 2:
+            device = parts[0].strip()
+            try:
+                quota = max(0, int(parts[1].strip()))
+            except (ValueError, TypeError):
+                return
+            new_quota = dict(self.form_device_quota)
+            new_quota[device] = quota
+            self.form_device_quota = new_quota
+
     def clear_form(self):
         self.form_name = ""
         self.form_description = ""
@@ -922,6 +1138,8 @@ class NexusState(rx.State):
         self.form_error = ""
         self.form_is_edit = False
         self.form_edit_campaign_id = ""
+        self.form_device_type = "Multi-device"
+        self.form_device_quota = {}
 
     async def load_edit_campaign(self):
         cid = self.router.page.params.get("campaign_id", "")
@@ -942,6 +1160,8 @@ class NexusState(rx.State):
         self.form_goal = str(campaign.get("goal", 100))
         self.form_calendar_id = campaign.get("calendar_id", "primary")
         self.form_calendar_filter = campaign.get("calendar_filter", "")
+        self.form_device_type = campaign.get("device_type", "Multi-device")
+        self.form_device_quota = campaign.get("device_quota", {})
         self.form_error = ""
 
     async def create_campaign(self):
@@ -958,6 +1178,8 @@ class NexusState(rx.State):
             "goal": self.form_goal.strip() or "100",
             "calendar_id": self.form_calendar_id.strip() or "primary",
             "calendar_filter": self.form_calendar_filter.strip(),
+            "device_type": self.form_device_type or "Multi-device",
+            "device_quota": dict(self.form_device_quota),
         })
         self.clear_form()
         return rx.redirect(f"/campaign/{cid}")
@@ -979,6 +1201,17 @@ class NexusState(rx.State):
             "goal": self.form_goal.strip() or "100",
             "calendar_id": self.form_calendar_id.strip() or "primary",
             "calendar_filter": self.form_calendar_filter.strip(),
+            "device_type": self.form_device_type or "Multi-device",
+            "device_quota": dict(self.form_device_quota),
         })
         self.clear_form()
         return rx.redirect(f"/campaign/{cid}")
+
+    # CAMPAIGN CLONING
+
+    async def clone_current_campaign(self):
+        cid = self.active_campaign_id
+        if cid:
+            new_cid = await db_clone_campaign(cid)
+            if new_cid:
+                return rx.redirect(f"/campaign/{new_cid}/edit")

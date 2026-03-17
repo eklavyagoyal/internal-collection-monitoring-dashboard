@@ -23,7 +23,8 @@ _client: AsyncIOMotorClient | None = None
 # Default label sets shipped with a fresh install.
 DEFAULT_PLATFORMS = ["Orb", "Kiosk-v1", "Kiosk-v2", "Self-Serve", "Other"]
 DEFAULT_MODEL_TAGS = ["v4.5", "v4.6", "v5.0", "beta"]
-DEFAULT_STATUSES = ["Pending", "In-Progress", "Completed"]
+DEFAULT_STATUSES = ["Booked", "Completed"]
+DEFAULT_DEVICE_TYPES = ["iOS", "Android", "Orb", "Multi-device"]
 
 
 def _get_client() -> AsyncIOMotorClient:
@@ -70,6 +71,16 @@ async def ensure_indexes() -> None:
     await _participants().create_index(
         [("campaign_id", 1), ("appointment_date", 1)],
     )
+    await _participants().create_index(
+        [("campaign_id", 1), ("status", 1)],
+    )
+    await _participants().create_index("email")
+
+    # Migrate legacy statuses to new model
+    await _participants().update_many(
+        {"status": {"$in": ["Pending", "In-Progress"]}},
+        {"$set": {"status": "Booked"}},
+    )
 
 
 # =========================================================================
@@ -88,6 +99,7 @@ async def get_settings() -> dict:
         "platforms": DEFAULT_PLATFORMS,
         "model_tags": DEFAULT_MODEL_TAGS,
         "statuses": DEFAULT_STATUSES,
+        "admin_pin_hash": "",
     }
     await _settings().insert_one(defaults)
     defaults["_id"] = str(defaults.get("_id", ""))
@@ -103,6 +115,23 @@ async def update_label_list(label_type: str, values: list[str]) -> None:
         {"$set": {label_type: values}},
         upsert=True,
     )
+
+
+async def set_admin_pin(pin_hash: str) -> None:
+    """Store the hashed admin PIN in settings."""
+    await _settings().update_one(
+        {"_key": "labels"},
+        {"$set": {"admin_pin_hash": pin_hash}},
+        upsert=True,
+    )
+
+
+async def get_admin_pin_hash() -> str:
+    """Return the stored admin PIN hash, or empty string if not set."""
+    doc = await _settings().find_one({"_key": "labels"})
+    if doc:
+        return doc.get("admin_pin_hash", "")
+    return ""
 
 
 # =========================================================================
@@ -121,6 +150,17 @@ async def create_campaign(data: dict) -> str:
     except (ValueError, TypeError):
         goal = 100
 
+    # Validate device_quota: must be dict[str, int]
+    raw_quota = data.get("device_quota", {})
+    if not isinstance(raw_quota, dict):
+        raw_quota = {}
+    device_quota = {}
+    for k, v in raw_quota.items():
+        try:
+            device_quota[str(k)] = max(0, int(v))
+        except (ValueError, TypeError):
+            pass
+
     await _campaigns().insert_one({
         "campaign_id": cid,
         "name": data["name"],
@@ -130,6 +170,8 @@ async def create_campaign(data: dict) -> str:
         "linear_url": data.get("linear_url", ""),
         "deadline": data.get("deadline", ""),
         "goal": goal,
+        "device_type": data.get("device_type", "Multi-device"),
+        "device_quota": device_quota,
         # calendar_ids is a list of {calendar_id, filter} objects
         "calendar_ids": data.get("calendar_ids", []),
         # legacy single-calendar fields kept for backward compat
@@ -150,7 +192,7 @@ async def update_campaign(campaign_id: str, data: dict) -> None:
         "name", "description", "booking_url",
         "notion_url", "linear_url", "deadline",
         "calendar_id", "calendar_filter", "calendar_ids", "status",
-        "goal",
+        "goal", "device_type", "device_quota",
     }
     sets = {k: v for k, v in data.items() if k in allowed}
 
@@ -168,16 +210,23 @@ async def update_campaign(campaign_id: str, data: dict) -> None:
     )
 
 
+def _backfill_campaign(doc: dict) -> dict:
+    """Ensure all expected fields exist on a campaign document."""
+    doc.setdefault("goal", 100)
+    doc.setdefault("notion_url", "")
+    doc.setdefault("linear_url", "")
+    doc.setdefault("deadline", "")
+    doc.setdefault("device_type", "Multi-device")
+    doc.setdefault("device_quota", {})
+    return doc
+
+
 async def get_all_campaigns() -> list[dict]:
     cursor = _campaigns().find().sort("created_at", -1)
     out: list[dict] = []
     async for doc in cursor:
         doc["_id"] = str(doc["_id"])
-        # Backfill goal for old campaigns
-        doc.setdefault("goal", 100)
-        doc.setdefault("notion_url", "")
-        doc.setdefault("linear_url", "")
-        doc.setdefault("deadline", "")
+        _backfill_campaign(doc)
         out.append(doc)
     return out
 
@@ -186,10 +235,7 @@ async def get_campaign(campaign_id: str) -> dict | None:
     doc = await _campaigns().find_one({"campaign_id": campaign_id})
     if doc:
         doc["_id"] = str(doc["_id"])
-        doc.setdefault("goal", 100)
-        doc.setdefault("notion_url", "")
-        doc.setdefault("linear_url", "")
-        doc.setdefault("deadline", "")
+        _backfill_campaign(doc)
     return doc
 
 
@@ -291,11 +337,9 @@ async def get_all_campaigns_with_stats(
         parts = await get_participants_for_campaign(cid, date)
         total = len(parts)
         completed = sum(1 for p in parts if p.get("status") == "Completed")
-        in_prog = sum(1 for p in parts if p.get("status") == "In-Progress")
         c["today_total"] = total
         c["today_completed"] = completed
-        c["today_in_progress"] = in_prog
-        c["today_pending"] = total - completed - in_prog
+        c["today_booked"] = total - completed
         c["today_progress"] = int(completed / total * 100) if total else 0
 
         # Overall progress across all dates
@@ -327,7 +371,7 @@ async def upsert_participant(
                 "campaign_id": campaign_id,
                 "google_event_id": event_id,
                 "platform": "", "model_tag": "",
-                "status": "Pending", "notes": "",
+                "status": "Booked", "notes": "",
                 "issue_comment": "",
                 "start_time": None, "end_time": None,
                 "created_at": now,
@@ -376,12 +420,9 @@ async def update_participant_status(
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
     update: dict[str, Any] = {"status": new_status, "updated_at": now}
-    if new_status == "In-Progress":
-        update["start_time"] = now
-    elif new_status == "Completed":
+    if new_status == "Completed":
         update["end_time"] = now
-    elif new_status == "Pending":
-        update["start_time"] = None
+    elif new_status == "Booked":
         update["end_time"] = None
     await _participants().update_one(
         {"campaign_id": campaign_id, "google_event_id": event_id},
@@ -415,7 +456,7 @@ async def add_manual_participant(
         "appointment_date": appointment_date,
         "platform": "",
         "model_tag": "",
-        "status": "Pending",
+        "status": "Booked",
         "notes": "",
         "issue_comment": "",
         "start_time": None,
@@ -500,3 +541,58 @@ async def get_synced_dates_for_campaign(campaign_id: str) -> list[str]:
     return await _participants().distinct(
         "appointment_date", {"campaign_id": campaign_id},
     )
+
+
+# =========================================================================
+# Per-device progress (for device quota tracking)
+# =========================================================================
+
+async def get_per_device_progress(campaign_id: str) -> dict[str, dict]:
+    """Return per-platform participant counts for a campaign.
+
+    Returns ``{platform: {total: N, completed: N}}`` for each platform
+    that has at least one participant.
+    """
+    pipeline = [
+        {"$match": {"campaign_id": campaign_id, "platform": {"$ne": ""}}},
+        {"$group": {
+            "_id": "$platform",
+            "total": {"$sum": 1},
+            "completed": {
+                "$sum": {"$cond": [{"$eq": ["$status", "Completed"]}, 1, 0]},
+            },
+        }},
+    ]
+    cursor = _participants().aggregate(pipeline)
+    result: dict[str, dict] = {}
+    async for doc in cursor:
+        result[doc["_id"]] = {
+            "total": doc["total"],
+            "completed": doc["completed"],
+        }
+    return result
+
+
+# =========================================================================
+# Campaign cloning
+# =========================================================================
+
+async def clone_campaign(campaign_id: str) -> str | None:
+    """Clone a campaign's settings (no participants). Returns new ID."""
+    source = await get_campaign(campaign_id)
+    if not source:
+        return None
+    return await create_campaign({
+        "name": source["name"] + " (Copy)",
+        "description": source.get("description", ""),
+        "booking_url": source.get("booking_url", ""),
+        "notion_url": source.get("notion_url", ""),
+        "linear_url": source.get("linear_url", ""),
+        "deadline": source.get("deadline", ""),
+        "goal": source.get("goal", 100),
+        "device_type": source.get("device_type", "Multi-device"),
+        "device_quota": source.get("device_quota", {}),
+        "calendar_id": source.get("calendar_id", "primary"),
+        "calendar_filter": source.get("calendar_filter", ""),
+        "calendar_ids": source.get("calendar_ids", []),
+    })

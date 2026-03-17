@@ -36,21 +36,20 @@ def participant_row(p: dict) -> rx.Component:
     issue_comment = p["issue_comment"].to(str)
 
     has_issue = issue_comment != ""
+    is_completed = status == "Completed"
 
     return rx.box(
         # ── Main row (never wraps)
         rx.hstack(
-            # Checkbox
+            # Completion checkbox
             rx.checkbox(
-                checked=NexusState.selected_ids.contains(eid),
-                on_change=lambda _v: NexusState.toggle_select(eid),
+                checked=is_completed,
+                on_change=lambda _v: NexusState.toggle_completed(eid),
                 size="2",
-                color_scheme="iris",
+                color_scheme="green",
                 cursor="pointer",
                 flex_shrink="0",
             ),
-            # Status dot
-            status_dot(status, size="8px"),
             # Date + time chip
             rx.center(
                 rx.text(
@@ -73,11 +72,12 @@ def participant_row(p: dict) -> rx.Component:
                     name,
                     size="2",
                     weight="medium",
-                    color=HEADING,
+                    color=rx.cond(is_completed, SUBTEXT, HEADING),
                     white_space="nowrap",
                     overflow="hidden",
                     text_overflow="ellipsis",
                     max_width="100%",
+                    text_decoration=rx.cond(is_completed, "line-through", "none"),
                 ),
                 rx.cond(
                     email != "",
@@ -112,14 +112,6 @@ def participant_row(p: dict) -> rx.Component:
                 value=model_tag,
                 placeholder="Model",
                 on_change=lambda v: NexusState.set_model_tag(eid, v),
-                size="1",
-                variant="soft",
-                flex_shrink="0",
-            ),
-            rx.select(
-                NexusState.statuses,
-                value=status,
-                on_change=lambda v: NexusState.set_status(eid, v),
                 size="1",
                 variant="soft",
                 flex_shrink="0",

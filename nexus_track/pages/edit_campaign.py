@@ -6,6 +6,8 @@ from ..state import NexusState
 from ..components.design_tokens import (
     ACCENT,
     ACCENT_GRADIENT,
+    BORDER,
+    CARD_BG,
     HEADING,
     MAX_WIDTH_NARROW,
     PAGE_PADDING_BOTTOM,
@@ -161,6 +163,64 @@ def edit_campaign_page() -> rx.Component:
                     size="1",
                     color=SUBTEXT,
                     font_style="italic",
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            margin_bottom="24px",
+        ),
+        # -- Section 5: Device Configuration
+        glass_card(
+            section_header(
+                "monitor-smartphone",
+                "Device Configuration",
+                "Set the device type and per-device participant quotas",
+            ),
+            rx.vstack(
+                rx.vstack(
+                    rx.text("Device Type", size="2", weight="medium", color=SUBTEXT),
+                    rx.select(
+                        ["Multi-device", "iOS", "Android", "Orb"],
+                        value=NexusState.form_device_type,
+                        on_change=NexusState.set_form_device_type,
+                        size="2",
+                        variant="surface",
+                    ),
+                    spacing="1",
+                    width="100%",
+                ),
+                rx.vstack(
+                    rx.text("Device Quotas (optional)", size="2", weight="medium", color=SUBTEXT),
+                    rx.text(
+                        "Set max participants per platform. Format: enter quota for each platform.",
+                        size="1", color=SUBTEXT, font_style="italic",
+                    ),
+                    rx.foreach(
+                        NexusState.platforms,
+                        lambda p: rx.hstack(
+                            rx.text(p, size="2", weight="medium", color=HEADING, min_width="90px"),
+                            rx.el.input(
+                                type="text",
+                                input_mode="numeric",
+                                placeholder="No limit",
+                                default_value=NexusState.form_device_quota[p].to(str),
+                                on_blur=lambda v: NexusState.set_form_device_quota_value(p + ":" + v),
+                                style={
+                                    "width": "100px",
+                                    "padding": "6px 10px",
+                                    "border_radius": RADIUS_SM,
+                                    "border": BORDER,
+                                    "background": CARD_BG,
+                                    "color": "inherit",
+                                    "font_size": "13px",
+                                },
+                            ),
+                            spacing="2",
+                            align="center",
+                        ),
+                    ),
+                    spacing="2",
+                    width="100%",
                 ),
                 spacing="3",
                 width="100%",

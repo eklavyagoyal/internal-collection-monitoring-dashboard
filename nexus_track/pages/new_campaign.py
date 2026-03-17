@@ -9,6 +9,7 @@ from ..components.design_tokens import (
     ACCENT_SOFT,
     AMBER,
     AMBER_SOFT,
+    BORDER,
     HEADING,
     MAX_WIDTH_NARROW,
     PAGE_PADDING_BOTTOM,
@@ -183,6 +184,37 @@ def new_campaign_page() -> rx.Component:
                 padding="12px",
                 border_radius=RADIUS_MD,
                 background=AMBER_SOFT,
+            ),
+            margin_bottom="24px",
+        ),
+        # -- Section 5: Device Configuration
+        glass_card(
+            section_header(
+                "monitor-smartphone",
+                "Device Configuration",
+                "Set the device type and optional per-device quotas",
+            ),
+            rx.vstack(
+                rx.vstack(
+                    rx.text("Device Type", size="2", weight="medium", color=SUBTEXT),
+                    rx.select(
+                        ["Multi-device", "iOS", "Android", "Orb"],
+                        value=NexusState.form_device_type,
+                        on_change=NexusState.set_form_device_type,
+                        size="2",
+                        variant="surface",
+                    ),
+                    spacing="1",
+                    width="100%",
+                ),
+                rx.text(
+                    "Device quotas can be configured after creation via Edit.",
+                    size="1",
+                    color=SUBTEXT,
+                    font_style="italic",
+                ),
+                spacing="3",
+                width="100%",
             ),
             margin_bottom="24px",
         ),
