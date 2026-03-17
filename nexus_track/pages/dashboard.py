@@ -26,9 +26,28 @@ from ..components.design_tokens import (
     SHADOW_SM,
     SUBTEXT,
     TEXT,
+    TRANSITION_FAST,
     glass_card,
     progress_bar,
 )
+
+
+def _device_chip(label: str, value: str) -> rx.Component:
+    """Filter chip that highlights when active."""
+    is_active = NexusState.campaign_device_filter == value
+    return rx.box(
+        rx.text(label, size="1", weight="medium",
+                color=rx.cond(is_active, "white", SUBTEXT)),
+        padding_x="10px",
+        padding_y="4px",
+        border_radius=RADIUS_SM,
+        background=rx.cond(is_active, ACCENT, "transparent"),
+        border=rx.cond(is_active, "1px solid transparent", BORDER),
+        cursor="pointer",
+        transition=TRANSITION_FAST,
+        on_click=NexusState.set_campaign_device_filter(value),
+        _hover={"opacity": "0.8"},
+    )
 
 
 # -- Empty state
@@ -173,6 +192,27 @@ def dashboard_page() -> rx.Component:
                 columns=rx.breakpoints(initial="2", sm="4"),
                 spacing="3",
                 width="100%",
+            ),
+            # -- Device filter chips + sort selector
+            rx.hstack(
+                _device_chip("All", ""),
+                _device_chip("iOS", "iOS"),
+                _device_chip("Android", "Android"),
+                _device_chip("Orb", "Orb"),
+                _device_chip("Multi-device", "Multi-device"),
+                rx.spacer(),
+                rx.select(
+                    ["created_at", "name", "device_type", "progress"],
+                    value=NexusState.campaign_sort_field,
+                    on_change=NexusState.set_campaign_sort_field,
+                    placeholder="Sort by...",
+                    size="1",
+                    variant="soft",
+                ),
+                spacing="2",
+                align="center",
+                width="100%",
+                flex_wrap="wrap",
             ),
             # -- Overall progress bar card
             glass_card(

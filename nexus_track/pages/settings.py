@@ -20,6 +20,7 @@ from ..components.design_tokens import (
     RADIUS_MD,
     RADIUS_SM,
     RED,
+    RED_SOFT,
     SHADOW_SM,
     SUBTEXT,
     TEXT,
@@ -329,6 +330,105 @@ def settings_page() -> rx.Component:
         # -- full-width info card
         rx.box(
             _booking_info(),
+            margin_top="16px",
+            width="100%",
+        ),
+        # -- Admin PIN section
+        glass_card(
+            section_header(
+                "shield",
+                "Admin Access",
+                "Set or change the admin PIN to protect campaign management",
+            ),
+            rx.cond(
+                NexusState.admin_mode,
+                rx.vstack(
+                    rx.hstack(
+                        rx.badge("Admin Mode Active", color_scheme="green", size="2"),
+                        rx.button(
+                            "Logout",
+                            size="1",
+                            variant="soft",
+                            color_scheme="red",
+                            on_click=NexusState.logout_admin,
+                            cursor="pointer",
+                        ),
+                        spacing="2",
+                        align="center",
+                    ),
+                    rx.hstack(
+                        rx.el.input(
+                            type="password",
+                            placeholder="New PIN (min 4 chars)",
+                            value=NexusState.new_admin_pin,
+                            on_change=NexusState.set_new_admin_pin,
+                            style={
+                                "width": "200px",
+                                "padding": "6px 10px",
+                                "border_radius": RADIUS_SM,
+                                "border": BORDER,
+                                "background": CARD_BG,
+                                "color": "inherit",
+                                "font_size": "13px",
+                            },
+                        ),
+                        rx.button(
+                            "Set PIN",
+                            size="1",
+                            variant="soft",
+                            color_scheme="iris",
+                            on_click=NexusState.set_admin_pin_value,
+                            cursor="pointer",
+                        ),
+                        spacing="2",
+                        align="center",
+                    ),
+                    spacing="3",
+                ),
+                # Not admin - show login
+                rx.vstack(
+                    rx.cond(
+                        NexusState.admin_error != "",
+                        rx.text(NexusState.admin_error, size="2", color=RED),
+                    ),
+                    rx.hstack(
+                        rx.el.input(
+                            type="password",
+                            placeholder="Enter admin PIN",
+                            value=NexusState.admin_pin_input,
+                            on_change=NexusState.set_admin_pin_input,
+                            style={
+                                "width": "200px",
+                                "padding": "6px 10px",
+                                "border_radius": RADIUS_SM,
+                                "border": BORDER,
+                                "background": CARD_BG,
+                                "color": "inherit",
+                                "font_size": "13px",
+                            },
+                        ),
+                        rx.button(
+                            "Login",
+                            size="1",
+                            variant="soft",
+                            color_scheme="iris",
+                            on_click=NexusState.login_admin,
+                            cursor="pointer",
+                        ),
+                        spacing="2",
+                        align="center",
+                    ),
+                    rx.cond(
+                        NexusState.has_admin_pin,
+                        rx.text("Admin PIN is configured.", size="1", color=SUBTEXT),
+                        rx.text(
+                            "No PIN set yet. Enter any PIN to login for the first time, then set one in admin mode.",
+                            size="1", color=AMBER,
+                        ),
+                    ),
+                    spacing="2",
+                ),
+            ),
             margin_top="16px",
             width="100%",
         ),

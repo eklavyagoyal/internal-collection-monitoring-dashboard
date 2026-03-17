@@ -71,12 +71,12 @@ class TestCreateCampaign:
         assert doc["goal"] == 100
 
     @pytest.mark.asyncio
-    async def test_no_notion_or_linear_fields(self):
-        """Notion/Linear fields were removed — they should not appear."""
+    async def test_notion_and_linear_default_empty(self):
+        """Notion/Linear fields should default to empty strings."""
         cid = await mc.create_campaign({"name": "NL"})
         doc = await mc.get_campaign(cid)
-        assert "notion_url" not in doc
-        assert "linear_url" not in doc
+        assert doc["notion_url"] == ""
+        assert doc["linear_url"] == ""
 
 
 class TestUpdateCampaign:
