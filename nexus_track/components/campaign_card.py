@@ -79,23 +79,9 @@ def campaign_card(campaign: dict) -> rx.Component:
                     color=HEADING,
                     line_height="1.3",
                 ),
-                # -- Description (2 lines max)
-                rx.cond(
-                    description != "",
-                    rx.text(
-                        description,
-                        size="2",
-                        color=TEXT,
-                        max_height="40px",
-                        overflow="hidden",
-                        line_height="1.45",
-                    ),
-                    rx.fragment(),
-                ),
-                rx.spacer(),
-                # -- Dual progress bar (booked + completed vs goal)
+                # -- Dual progress bar directly under title
                 rx.vstack(
-                    dual_progress_bar(booked_pct, completed_pct, height="8px"),
+                    dual_progress_bar(booked_pct, completed_pct, height="10px"),
                     rx.hstack(
                         rx.hstack(
                             rx.box(
@@ -103,7 +89,7 @@ def campaign_card(campaign: dict) -> rx.Component:
                                 border_radius="2px",
                                 background=ACCENT_GRADIENT_H,
                             ),
-                            rx.text(completed_all, " completed", size="1", color=SUBTEXT),
+                            rx.text(completed_all, " done", size="1", color=SUBTEXT),
                             spacing="1", align="center",
                         ),
                         rx.hstack(
@@ -120,6 +106,20 @@ def campaign_card(campaign: dict) -> rx.Component:
                     spacing="1",
                     width="100%",
                 ),
+                # -- Description (2 lines max)
+                rx.cond(
+                    description != "",
+                    rx.text(
+                        description,
+                        size="2",
+                        color=TEXT,
+                        max_height="40px",
+                        overflow="hidden",
+                        line_height="1.45",
+                    ),
+                    rx.fragment(),
+                ),
+                rx.spacer(),
                 # -- Today's activity pills
                 rx.hstack(
                     rx.center(

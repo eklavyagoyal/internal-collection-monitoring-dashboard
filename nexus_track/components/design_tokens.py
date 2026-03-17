@@ -279,37 +279,20 @@ def dual_progress_bar(
 ) -> rx.Component:
     """Dual-layer progress bar showing booked (light) and completed (solid).
 
-    *booked_pct* and *completed_pct* are ``Var[int]`` (0-100).
-    Milestone markers are drawn at 25%, 50%, 75%.
+    *booked_pct* and *completed_pct* are ``Var[int]`` (0-100), already clamped.
+    The booked layer represents total scheduled participants (including completed).
+    The completed layer overlays it, so the visible booked-only color is the gap
+    between completed and total booked — giving a clear two-tone effect.
     """
     bar_bg = rx.color_mode_cond(
         light="rgba(0,0,0,0.05)", dark="rgba(255,255,255,0.06)",
     )
     booked_color = rx.color_mode_cond(
-        light="rgba(99,102,241,0.2)", dark="rgba(139,92,246,0.2)",
+        light="rgba(99,102,241,0.22)", dark="rgba(139,92,246,0.25)",
     )
 
-    def _milestone_marker(left_pct: str, label: str) -> rx.Component:
-        return rx.box(
-            rx.tooltip(
-                rx.box(
-                    width="2px",
-                    height="100%",
-                    background=rx.color_mode_cond(
-                        light="rgba(0,0,0,0.15)", dark="rgba(255,255,255,0.15)",
-                    ),
-                ),
-                content=label,
-            ),
-            position="absolute",
-            left=left_pct,
-            top="0",
-            height="100%",
-            z_index="3",
-        )
-
     return rx.box(
-        # Booked layer (background)
+        # Booked layer (background — full booked extent)
         rx.box(
             width=booked_pct.to(str) + "%",
             height="100%",
@@ -321,7 +304,7 @@ def dual_progress_bar(
             transition="width 0.7s cubic-bezier(0.4,0,0.2,1)",
             z_index="1",
         ),
-        # Completed layer (foreground)
+        # Completed layer (foreground — solid accent)
         rx.box(
             width=completed_pct.to(str) + "%",
             height="100%",
@@ -333,14 +316,10 @@ def dual_progress_bar(
             transition="width 0.7s cubic-bezier(0.4,0,0.2,1)",
             z_index="2",
         ),
-        # Milestone markers
-        _milestone_marker("25%", "25%"),
-        _milestone_marker("50%", "50%"),
-        _milestone_marker("75%", "75%"),
         width="100%",
         height=height,
         border_radius=RADIUS_SM,
-        overflow="visible",
+        overflow="hidden",
         background=bar_bg,
         position="relative",
     )

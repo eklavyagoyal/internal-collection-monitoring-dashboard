@@ -87,10 +87,6 @@ def dashboard_page() -> rx.Component:
                         color=HEADING,
                         letter_spacing="-0.03em",
                     ),
-                    rx.text(
-                        NexusState.display_date_label,
-                        size="2", color=SUBTEXT,
-                    ),
                     spacing="1",
                 ),
                 rx.hstack(

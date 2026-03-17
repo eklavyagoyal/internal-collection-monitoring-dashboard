@@ -28,6 +28,7 @@ def participant_row(p: dict) -> rx.Component:
     name = p["name"].to(str)
     email = p["email"].to(str)
     time = p["appointment_time"].to(str)
+    date = p["appointment_date"].to(str)
     platform = p["platform"].to(str)
     model_tag = p["model_tag"].to(str)
     status = p["status"].to(str)
@@ -50,28 +51,10 @@ def participant_row(p: dict) -> rx.Component:
             ),
             # Status dot
             status_dot(status, size="8px"),
-            # Issue flag
-            rx.tooltip(
-                rx.box(
-                    rx.icon(
-                        "triangle_alert",
-                        size=13,
-                        color=rx.cond(has_issue, RED, "rgba(255,255,255,0.18)"),
-                    ),
-                    padding="3px",
-                    border_radius=RADIUS_SM,
-                    background=rx.cond(has_issue, RED_SOFT, "transparent"),
-                    cursor="pointer",
-                    on_click=NexusState.open_issue_editor(eid),
-                    _hover={"opacity": "0.8"},
-                    flex_shrink="0",
-                ),
-                content=rx.cond(has_issue, issue_comment, "Flag issue"),
-            ),
-            # Time chip
+            # Date + time chip
             rx.center(
                 rx.text(
-                    time,
+                    date + " " + time,
                     size="1",
                     weight="bold",
                     color=ACCENT,
@@ -82,7 +65,7 @@ def participant_row(p: dict) -> rx.Component:
                 border_radius=RADIUS_SM,
                 background=ACCENT_SOFT,
                 flex_shrink="0",
-                min_width="52px",
+                min_width="110px",
             ),
             # Name / email — grows, truncates
             rx.vstack(
@@ -157,33 +140,22 @@ def participant_row(p: dict) -> rx.Component:
             width="100%",
             overflow="hidden",
         ),
-        # ── Notes row
+        # ── Notes row (inline, no extra icon)
         rx.box(
-            rx.hstack(
-                rx.icon(
-                    "message-square", size=11,
-                    color=SUBTEXT,
-                    flex_shrink="0",
-                    margin_top="5px",
-                ),
-                rx.el.input(
-                    default_value=notes,
-                    placeholder="Add notes...",
-                    on_blur=lambda e: NexusState.set_notes(eid, e),
-                    style={
-                        "width": "100%",
-                        "padding": "5px 10px",
-                        "border_radius": RADIUS_SM,
-                        "border": "1px solid rgba(255,255,255,0.07)",
-                        "font_size": "12px",
-                        "outline": "none",
-                        "background": "rgba(255,255,255,0.03)",
-                        "color": "inherit",
-                    },
-                ),
-                spacing="2",
-                align="start",
-                width="100%",
+            rx.el.input(
+                default_value=notes,
+                placeholder="Add notes...",
+                on_blur=lambda e: NexusState.set_notes(eid, e),
+                style={
+                    "width": "100%",
+                    "padding": "5px 10px",
+                    "border_radius": RADIUS_SM,
+                    "border": "1px solid rgba(255,255,255,0.07)",
+                    "font_size": "12px",
+                    "outline": "none",
+                    "background": "rgba(255,255,255,0.03)",
+                    "color": "inherit",
+                },
             ),
             padding_top="10px",
             margin_top="10px",

@@ -435,21 +435,17 @@ class NexusState(rx.State):
     async def _reload_participants(self):
         cid = self.active_campaign_id
         if cid:
-            date = self._get_date()
-            self.participants = await get_participants_for_campaign(cid, date)
+            self.participants = await get_participants_for_campaign(cid)
             self.selected_ids = []
 
     async def navigate_prev_day(self):
         self.go_prev_day()
-        await self._reload_participants()
 
     async def navigate_next_day(self):
         self.go_next_day()
-        await self._reload_participants()
 
     async def navigate_to_today(self):
         self.go_to_today()
-        await self._reload_participants()
 
     # DASHBOARD
 
@@ -494,8 +490,7 @@ class NexusState(rx.State):
                 campaign["booked"] = progress["booked"]
                 campaign["completed_all"] = progress["completed"]
                 self.current_campaign = campaign
-                date = self._get_date()
-                self.participants = await get_participants_for_campaign(cid, date)
+                self.participants = await get_participants_for_campaign(cid)
             else:
                 self.current_campaign = {}
                 self.participants = []
@@ -596,7 +591,7 @@ class NexusState(rx.State):
             # Update last_sync_at on the campaign
             from .backend.mongo_client import update_campaign_field as _ucf
             await _ucf(cid, "last_sync_at", datetime.now().isoformat())
-            fresh = await get_participants_for_campaign(cid, date)
+            fresh = await get_participants_for_campaign(cid)
             progress = await get_campaign_progress(cid)
             async with self:
                 self.participants = fresh
@@ -644,9 +639,7 @@ class NexusState(rx.State):
             # Update last_sync_at on the campaign
             from .backend.mongo_client import update_campaign_field as _ucf
             await _ucf(cid, "last_sync_at", datetime.now().isoformat())
-            fresh = await get_participants_for_campaign(
-                cid, self.selected_date or datetime.now().strftime("%Y-%m-%d"),
-            )
+            fresh = await get_participants_for_campaign(cid)
             # Refresh overall progress
             progress = await get_campaign_progress(cid)
             async with self:
@@ -687,7 +680,7 @@ class NexusState(rx.State):
                 async with self:
                     self.campaigns = fresh_campaigns
                 if cid:
-                    fresh = await get_participants_for_campaign(cid, date)
+                    fresh = await get_participants_for_campaign(cid)
                     async with self:
                         self.participants = fresh
             except Exception:
@@ -815,8 +808,7 @@ class NexusState(rx.State):
         cid = self.active_campaign_id
         if not cid:
             return
-        date = self._get_date()
-        rows = await get_participants_for_export(cid, date)
+        rows = await get_participants_for_export(cid)
         if not rows:
             return
         buf = io.StringIO()
@@ -828,7 +820,7 @@ class NexusState(rx.State):
         writer.writerows(rows)
         csv_str = buf.getvalue()
         campaign_name = self.current_campaign.get("name", "export").replace(" ", "_")
-        filename = f"{campaign_name}_{date}.csv"
+        filename = f"{campaign_name}_all.csv"
         return rx.download(data=csv_str, filename=filename)
 
     # DELETE CAMPAIGN

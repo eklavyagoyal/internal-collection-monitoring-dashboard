@@ -43,8 +43,6 @@ from ..components.design_tokens import (
     glass_card,
     ghost_icon_btn,
     dual_progress_bar,
-    milestone_badges,
-    progress_bar,
     section_header,
     status_dot,
 )
@@ -82,71 +80,6 @@ def _stat_pill(label: str, value: rx.Var, color: str, bg) -> rx.Component:
     )
 
 
-# -----------------------------------------------------------------------
-# Date navigator strip
-# -----------------------------------------------------------------------
-
-def _date_navigator() -> rx.Component:
-    return rx.hstack(
-        rx.icon_button(
-            rx.icon("chevron-left", size=18),
-            size="2",
-            variant="soft",
-            color_scheme="gray",
-            border_radius=RADIUS_MD,
-            on_click=NexusState.navigate_prev_day,
-            cursor="pointer",
-        ),
-        rx.vstack(
-            rx.text(
-                NexusState.display_date_label,
-                size="3",
-                weight="bold",
-                color=HEADING,
-                text_align="center",
-            ),
-            spacing="0",
-            align="center",
-        ),
-        rx.icon_button(
-            rx.icon("chevron-right", size=18),
-            size="2",
-            variant="soft",
-            color_scheme="gray",
-            border_radius=RADIUS_MD,
-            on_click=NexusState.navigate_next_day,
-            cursor="pointer",
-        ),
-        rx.cond(
-            NexusState.is_today,
-            # On today: non-clickable purple "Today" badge
-            rx.badge(
-                "Today",
-                color_scheme="iris",
-                variant="solid",
-                size="1",
-                border_radius=RADIUS_SM,
-            ),
-            # On another day: clickable button to jump back
-            rx.button(
-                "Today",
-                size="1",
-                variant="soft",
-                color_scheme="iris",
-                border_radius=RADIUS_SM,
-                on_click=NexusState.navigate_to_today,
-                cursor="pointer",
-            ),
-        ),
-        spacing="3",
-        align="center",
-        padding_x="16px",
-        padding_y="10px",
-        border_radius=RADIUS_MD,
-        background=CARD_BG,
-        border=BORDER,
-        backdrop_filter="blur(16px) saturate(180%)",
-    )
 
 
 # -----------------------------------------------------------------------
@@ -155,8 +88,9 @@ def _date_navigator() -> rx.Component:
 
 def _campaign_header() -> rx.Component:
     return glass_card(
-        # Top row: name + actions
-        rx.hstack(
+        # ── 3-zone upper row: left | center badge | right goal card ──
+        rx.flex(
+            # LEFT: title, description, docs/links/booking
             rx.vstack(
                 rx.hstack(
                     rx.heading(
@@ -164,21 +98,6 @@ def _campaign_header() -> rx.Component:
                         size="6",
                         weight="bold",
                         color=HEADING,
-                    ),
-                    # status badge
-                    rx.cond(
-                        NexusState.campaign_status == "active",
-                        rx.badge("Active", color_scheme="green", size="1",
-                                 variant="soft", cursor="pointer",
-                                 on_click=NexusState.toggle_campaign_status),
-                        rx.cond(
-                            NexusState.campaign_status == "archived",
-                            rx.badge("Archived", color_scheme="gray", size="1",
-                                     variant="soft"),
-                            rx.badge("Paused", color_scheme="orange", size="1",
-                                     variant="soft", cursor="pointer",
-                                     on_click=NexusState.toggle_campaign_status),
-                        ),
                     ),
                     spacing="3",
                     align="center",
@@ -192,214 +111,218 @@ def _campaign_header() -> rx.Component:
                         line_height="1.5",
                     ),
                 ),
+                # Links row: Docs, Links, Booking
+                rx.hstack(
+                    rx.cond(
+                        NexusState.campaign_notion_url != "",
+                        rx.link(
+                            rx.hstack(
+                                rx.icon("book-open", size=13),
+                                rx.text("Docs", size="2", weight="medium"),
+                                spacing="1",
+                                align="center",
+                                color=ACCENT,
+                            ),
+                            href=NexusState.campaign_notion_url,
+                            is_external=True,
+                            padding_x="10px",
+                            padding_y="5px",
+                            border_radius=RADIUS_SM,
+                            background=ACCENT_SOFT,
+                            _hover={"opacity": "0.8"},
+                        ),
+                    ),
+                    rx.cond(
+                        NexusState.campaign_linear_url != "",
+                        rx.link(
+                            rx.hstack(
+                                rx.icon("layers", size=13),
+                                rx.text("Links", size="2", weight="medium"),
+                                spacing="1",
+                                align="center",
+                                color=SUBTEXT,
+                            ),
+                            href=NexusState.campaign_linear_url,
+                            is_external=True,
+                            padding_x="10px",
+                            padding_y="5px",
+                            border_radius=RADIUS_SM,
+                            background=ACCENT_SOFT,
+                            _hover={"opacity": "0.8"},
+                        ),
+                    ),
+                    rx.cond(
+                        NexusState.campaign_booking_url != "",
+                        rx.link(
+                            rx.hstack(
+                                rx.icon("calendar-check", size=13),
+                                rx.text("Booking", size="2", weight="medium"),
+                                spacing="1",
+                                align="center",
+                                color=ACCENT,
+                            ),
+                            href=NexusState.campaign_booking_url,
+                            is_external=True,
+                            padding_x="10px",
+                            padding_y="5px",
+                            border_radius=RADIUS_SM,
+                            background=ACCENT_SOFT,
+                            _hover={"opacity": "0.8"},
+                        ),
+                    ),
+                    spacing="2",
+                    flex_wrap="wrap",
+                    margin_top="4px",
+                ),
                 spacing="2",
+                flex="1",
+                min_width="0",
             ),
-            rx.spacer(),
-            # Action buttons
-            rx.hstack(
-                # Archive / Unarchive
+            # CENTER: campaign status badge
+            rx.vstack(
                 rx.cond(
-                    NexusState.campaign_status == "archived",
-                    rx.icon_button(
-                        rx.icon("archive-restore", size=16),
-                        size="2",
-                        variant="soft",
-                        color_scheme="green",
-                        border_radius=RADIUS_MD,
-                        on_click=NexusState.unarchive_campaign,
-                        cursor="pointer",
-                        title="Unarchive",
-                    ),
-                    rx.icon_button(
-                        rx.icon("archive", size=16),
-                        size="2",
-                        variant="soft",
-                        color_scheme="gray",
-                        border_radius=RADIUS_MD,
-                        on_click=NexusState.archive_campaign,
-                        cursor="pointer",
-                        title="Archive",
+                    NexusState.campaign_status == "active",
+                    rx.badge("Active", color_scheme="green", size="2",
+                             variant="soft", cursor="pointer",
+                             on_click=NexusState.toggle_campaign_status),
+                    rx.cond(
+                        NexusState.campaign_status == "archived",
+                        rx.badge("Archived", color_scheme="gray", size="2",
+                                 variant="soft"),
+                        rx.badge("Paused", color_scheme="orange", size="2",
+                                 variant="soft", cursor="pointer",
+                                 on_click=NexusState.toggle_campaign_status),
                     ),
                 ),
-                rx.link(
-                    rx.icon_button(
-                        rx.icon("pencil", size=16),
-                        size="2",
-                        variant="soft",
-                        color_scheme="iris",
-                        border_radius=RADIUS_MD,
-                        cursor="pointer",
+                # Meta pills: filter, created, last sync
+                rx.hstack(
+                    rx.cond(
+                        NexusState.campaign_calendar_filter != "",
+                        rx.hstack(
+                            rx.icon("filter", size=11, color=ACCENT),
+                            rx.text(NexusState.campaign_calendar_filter, size="1"),
+                            spacing="1", align="center",
+                        ),
                     ),
-                    href="/campaign/" + NexusState.active_campaign_id + "/edit",
-                ),
-                rx.icon_button(
-                    rx.icon("trash-2", size=16),
-                    size="2",
-                    variant="soft",
-                    color_scheme="red",
-                    border_radius=RADIUS_MD,
-                    on_click=NexusState.toggle_delete_dialog,
-                    cursor="pointer",
+                    rx.cond(
+                        NexusState.campaign_last_sync != "",
+                        rx.hstack(
+                            rx.icon("refresh-cw", size=11, color=SUBTEXT),
+                            rx.text(NexusState.campaign_last_sync, size="1", color=SUBTEXT),
+                            spacing="1", align="center",
+                        ),
+                    ),
+                    spacing="2",
+                    flex_wrap="wrap",
                 ),
                 spacing="2",
-            ),
-            width="100%",
-            align="start",
-        ),
-        # Meta pills row
-        rx.hstack(
-            rx.cond(
-                NexusState.campaign_calendar_filter != "",
-                rx.hstack(
-                    rx.icon("filter", size=12, color=ACCENT),
-                    rx.text(NexusState.campaign_calendar_filter, size="1"),
-                    spacing="1",
-                    align="center",
-                    padding_x="10px",
-                    padding_y="4px",
-                    border_radius=RADIUS_SM,
-                    background=ACCENT_SOFT,
-                ),
-            ),
-            rx.cond(
-                NexusState.campaign_created_at != "",
-                rx.hstack(
-                    rx.icon("calendar", size=12, color=SUBTEXT),
-                    rx.text(NexusState.campaign_created_at, size="1", color=SUBTEXT),
-                    spacing="1",
-                    align="center",
-                ),
-            ),
-            # Goal pill
-            rx.hstack(
-                rx.icon("target", size=12, color=ACCENT),
-                rx.text(
-                    "Goal: " + NexusState.campaign_goal.to(str),
-                    size="1",
-                    weight="medium",
-                ),
-                spacing="1",
                 align="center",
-                padding_x="10px",
-                padding_y="4px",
-                border_radius=RADIUS_SM,
-                background=ACCENT_SOFT,
+                flex_shrink="0",
+                padding_x="16px",
             ),
-            # Last sync pill
-            rx.cond(
-                NexusState.campaign_last_sync != "",
+            # RIGHT: goal/deadline card + action buttons
+            rx.vstack(
+                # Goal / Deadline card
+                rx.box(
+                    rx.vstack(
+                        rx.hstack(
+                            rx.icon("target", size=14, color=ACCENT),
+                            rx.text(
+                                "Goal: ",
+                                rx.text(
+                                    NexusState.campaign_goal.to(str),
+                                    weight="bold",
+                                    as_="span",
+                                ),
+                                size="2",
+                                color=HEADING,
+                            ),
+                            spacing="2",
+                            align="center",
+                        ),
+                        rx.cond(
+                            NexusState.campaign_deadline != "",
+                            rx.hstack(
+                                rx.icon("calendar-clock", size=14, color=AMBER),
+                                rx.text(
+                                    "Due " + NexusState.campaign_deadline,
+                                    size="2",
+                                    color=AMBER,
+                                    weight="medium",
+                                ),
+                                spacing="2",
+                                align="center",
+                            ),
+                        ),
+                        spacing="2",
+                    ),
+                    padding="12px 16px",
+                    border_radius=RADIUS_MD,
+                    background=CARD_BG,
+                    border=BORDER,
+                    min_width="160px",
+                ),
+                # Action buttons
                 rx.hstack(
-                    rx.icon("refresh-cw", size=12, color=SUBTEXT),
-                    rx.text(NexusState.campaign_last_sync, size="1", color=SUBTEXT),
-                    spacing="1",
-                    align="center",
-                ),
-            ),
-            rx.cond(
-                NexusState.campaign_booking_url != "",
-                rx.link(
-                    rx.hstack(
-                        rx.icon("calendar-check", size=12),
-                        rx.text("Booking", size="1"),
-                        spacing="1", color=ACCENT,
+                    rx.cond(
+                        NexusState.campaign_status == "archived",
+                        rx.icon_button(
+                            rx.icon("archive-restore", size=16),
+                            size="2",
+                            variant="soft",
+                            color_scheme="green",
+                            border_radius=RADIUS_MD,
+                            on_click=NexusState.unarchive_campaign,
+                            cursor="pointer",
+                            title="Unarchive",
+                        ),
+                        rx.icon_button(
+                            rx.icon("archive", size=16),
+                            size="2",
+                            variant="soft",
+                            color_scheme="gray",
+                            border_radius=RADIUS_MD,
+                            on_click=NexusState.archive_campaign,
+                            cursor="pointer",
+                            title="Archive",
+                        ),
                     ),
-                    href=NexusState.campaign_booking_url,
-                    is_external=True,
-                ),
-            ),
-            rx.cond(
-                NexusState.campaign_notion_url != "",
-                rx.link(
-                    rx.hstack(
-                        rx.icon("book-open", size=12),
-                        rx.text("Notion", size="1"),
-                        spacing="1", color=SUBTEXT,
+                    rx.link(
+                        rx.icon_button(
+                            rx.icon("pencil", size=16),
+                            size="2",
+                            variant="soft",
+                            color_scheme="iris",
+                            border_radius=RADIUS_MD,
+                            cursor="pointer",
+                        ),
+                        href="/campaign/" + NexusState.active_campaign_id + "/edit",
                     ),
-                    href=NexusState.campaign_notion_url,
-                    is_external=True,
-                    padding_x="10px",
-                    padding_y="4px",
-                    border_radius=RADIUS_SM,
-                    background="rgba(255,255,255,0.05)",
-                    _hover={"background": "rgba(255,255,255,0.1)"},
-                ),
-            ),
-            rx.cond(
-                NexusState.campaign_linear_url != "",
-                rx.link(
-                    rx.hstack(
-                        rx.icon("layers", size=12),
-                        rx.text("Linear", size="1"),
-                        spacing="1", color=SUBTEXT,
+                    rx.icon_button(
+                        rx.icon("trash-2", size=16),
+                        size="2",
+                        variant="soft",
+                        color_scheme="red",
+                        border_radius=RADIUS_MD,
+                        on_click=NexusState.toggle_delete_dialog,
+                        cursor="pointer",
                     ),
-                    href=NexusState.campaign_linear_url,
-                    is_external=True,
-                    padding_x="10px",
-                    padding_y="4px",
-                    border_radius=RADIUS_SM,
-                    background="rgba(255,255,255,0.05)",
-                    _hover={"background": "rgba(255,255,255,0.1)"},
+                    spacing="2",
+                    margin_top="8px",
                 ),
+                spacing="2",
+                align="end",
+                flex_shrink="0",
             ),
-            rx.cond(
-                NexusState.campaign_deadline != "",
-                rx.hstack(
-                    rx.icon("calendar-clock", size=12, color=AMBER),
-                    rx.text(
-                        "Due " + NexusState.campaign_deadline,
-                        size="1",
-                        color=AMBER,
-                        weight="medium",
-                    ),
-                    spacing="1",
-                    align="center",
-                    padding_x="10px",
-                    padding_y="4px",
-                    border_radius=RADIUS_SM,
-                    background=AMBER_SOFT,
-                ),
-            ),
-            spacing="3",
-            align="center",
-            flex_wrap="wrap",
-            margin_top="12px",
-        ),
-        margin_bottom="16px",
-    )
-
-
-# -----------------------------------------------------------------------
-# Stats + progress bar
-# -----------------------------------------------------------------------
-
-def _stats_and_progress() -> rx.Component:
-    return rx.vstack(
-        # Daily stat pills
-        rx.hstack(
-            _stat_pill("Pending", NexusState.pending_count, AMBER, AMBER_SOFT),
-            _stat_pill("Active", NexusState.in_progress_count, ACCENT, ACCENT_SOFT),
-            _stat_pill("Done", NexusState.completed_count, GREEN, GREEN_SOFT),
-            rx.spacer(),
-            rx.text(
-                NexusState.progress_pct.to(str) + "% today",
-                size="3",
-                weight="bold",
-                background=ACCENT_GRADIENT,
-                background_clip="text",
-                color="transparent",
-            ),
-            spacing="3",
-            align="center",
+            direction=rx.breakpoints(initial="column", md="row"),
+            justify="between",
+            align=rx.breakpoints(initial="start", md="start"),
+            gap="4",
             width="100%",
-            flex_wrap="wrap",
         ),
-        # Daily progress bar
-        progress_bar(NexusState.progress_pct, height="6px"),
-        # Overall campaign progress (booked vs completed vs goal)
-        glass_card(
+        # ── Progress bar directly under header content ──
+        rx.box(
             rx.hstack(
-                rx.text("Campaign Progress", size="2", weight="bold", color=HEADING),
-                rx.spacer(),
                 rx.hstack(
                     rx.text(
                         NexusState.campaign_completed_all.to(str) + " completed",
@@ -418,24 +341,54 @@ def _stats_and_progress() -> rx.Component:
                     spacing="2",
                     align="center",
                 ),
+                rx.spacer(),
+                rx.text(
+                    NexusState.completed_pct.to(str) + "%",
+                    size="2", weight="bold",
+                    background=ACCENT_GRADIENT,
+                    background_clip="text",
+                    color="transparent",
+                ),
                 width="100%",
                 align="center",
             ),
-            rx.box(height="8px"),
+            rx.box(height="6px"),
             dual_progress_bar(
                 NexusState.booked_pct,
                 NexusState.completed_pct,
-                NexusState.campaign_goal,
-                height="10px",
+                height="12px",
             ),
-            rx.box(height="8px"),
-            milestone_badges(
-                NexusState.milestone_quarter,
-                NexusState.milestone_half,
-                NexusState.milestone_three_quarter,
-                NexusState.milestone_complete,
+            margin_top="16px",
+            padding_top="16px",
+            border_top=BORDER_SUBTLE,
+            width="100%",
+        ),
+        margin_bottom="16px",
+    )
+
+
+# -----------------------------------------------------------------------
+# Stats + progress bar
+# -----------------------------------------------------------------------
+
+def _stats_and_progress() -> rx.Component:
+    return rx.vstack(
+        # Stat pills
+        rx.hstack(
+            _stat_pill("Pending", NexusState.pending_count, AMBER, AMBER_SOFT),
+            _stat_pill("Active", NexusState.in_progress_count, ACCENT, ACCENT_SOFT),
+            _stat_pill("Done", NexusState.completed_count, GREEN, GREEN_SOFT),
+            rx.spacer(),
+            rx.text(
+                NexusState.total_count.to(str) + " total",
+                size="2",
+                weight="medium",
+                color=SUBTEXT,
             ),
-            padding="16px 20px",
+            spacing="3",
+            align="center",
+            width="100%",
+            flex_wrap="wrap",
         ),
         spacing="3",
         width="100%",
@@ -976,8 +929,7 @@ def _participant_list() -> rx.Component:
                     color_scheme="iris",
                     cursor="pointer",
                 ),
-                rx.text("", width="10px"),
-                _sort_header("Time", "appointment_time", width="60px"),
+                _sort_header("Date / Time", "appointment_time", width="110px"),
                 _sort_header("Participant", "name"),
                 rx.text("Platform", size="1", weight="bold", width="130px", color=SUBTEXT),
                 rx.text("Model", size="1", weight="bold", width="110px", color=SUBTEXT),
@@ -1001,13 +953,13 @@ def _participant_list() -> rx.Component:
         rx.center(
             rx.vstack(
                 rx.center(
-                    rx.icon("calendar-x", size=48, color=MUTED),
+                    rx.icon("users", size=48, color=MUTED),
                     width="88px", height="88px",
                     border_radius="50%",
                     background=ACCENT_SOFT,
                 ),
                 rx.text(
-                    "No participants for this date",
+                    "No participants yet",
                     size="3",
                     weight="medium",
                     color=HEADING,
@@ -1057,8 +1009,6 @@ def campaign_detail_page() -> rx.Component:
         ),
         # -- campaign header
         _campaign_header(),
-        # -- date navigator
-        _date_navigator(),
         rx.box(height="16px"),
         # -- stats & progress
         _stats_and_progress(),

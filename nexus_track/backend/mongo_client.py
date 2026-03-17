@@ -338,13 +338,19 @@ async def upsert_participant(
 
 
 async def get_participants_for_campaign(
-    campaign_id: str, date: str,
+    campaign_id: str, date: str | None = None,
 ) -> list[dict]:
-    cursor = (
-        _participants()
-        .find({"campaign_id": campaign_id, "appointment_date": date})
-        .sort("appointment_time", 1)
-    )
+    """Fetch participants for a campaign.
+
+    If *date* is given, return only that day's participants.
+    If *date* is ``None``, return **all** participants across every date,
+    sorted by appointment_date then appointment_time.
+    """
+    query: dict = {"campaign_id": campaign_id}
+    if date is not None:
+        query["appointment_date"] = date
+    sort_key = [("appointment_date", 1), ("appointment_time", 1)] if date is None else [("appointment_time", 1)]
+    cursor = _participants().find(query).sort(sort_key)
     out: list[dict] = []
     async for doc in cursor:
         doc["_id"] = str(doc["_id"])
