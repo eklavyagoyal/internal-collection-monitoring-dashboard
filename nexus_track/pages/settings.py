@@ -312,12 +312,16 @@ def settings_page() -> rx.Component:
                 add_fn=NexusState.add_model_tag,
                 remove_fn=NexusState.remove_model_tag,
             ),
-            _calendar_discovery(),
             columns=rx.breakpoints(initial="1", md="2"),
             spacing="4",
             width="100%",
         ),
-        # -- full-width info card
+        # -- full-width cards
+        rx.box(
+            _calendar_discovery(),
+            margin_top="16px",
+            width="100%",
+        ),
         rx.box(
             _booking_info(),
             margin_top="16px",
