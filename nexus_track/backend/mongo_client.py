@@ -278,31 +278,18 @@ async def get_campaign_progress(campaign_id: str) -> dict:
     """Return aggregated progress stats across ALL dates for a campaign.
 
     Returns {booked, completed} where:
-      - booked   = distinct participants with a scheduled appointment
-      - completed = distinct participants whose status is 'Completed'
-    Participant-based (not appointment-based) — each unique participant
-    counts at most once regardless of rescheduled or duplicate records.
+      - booked   = total participant entries (matches the bookings table)
+      - completed = entries whose status is 'Completed'
     """
     pipeline = [
         {"$match": {"campaign_id": campaign_id}},
-        # Deduplicate by email (or fallback to event_id if email empty).
-        {"$group": {
-            "_id": {
-                "$cond": [
-                    {"$ne": ["$email", ""]},
-                    "$email",
-                    {"$concat": ["$name", "||", "$google_event_id"]},
-                ]
-            },
-            "statuses": {"$addToSet": "$status"},
-        }},
         {"$group": {
             "_id": None,
             "booked": {"$sum": 1},
             "completed": {
                 "$sum": {
                     "$cond": [
-                        {"$in": ["Completed", "$statuses"]},
+                        {"$eq": ["$status", "Completed"]},
                         1, 0,
                     ]
                 }
