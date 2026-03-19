@@ -1086,7 +1086,7 @@ def _participant_list() -> rx.Component:
                     rx.cond(NexusState.completed_collapsed, "chevron-right", "chevron-down"),
                     size=16, color=SUBTEXT,
                 ),
-                rx.icon("check-circle-2", size=16, color=GREEN),
+                rx.icon("circle-check", size=16, color=GREEN),
                 rx.text(
                     "Completed",
                     size="3",

@@ -452,7 +452,7 @@ async def add_manual_participant(
         "google_event_id": event_id,
         "name": name,
         "email": email,
-        "appointment_time": appointment_time or "—",
+        "appointment_time": appointment_time or "",
         "appointment_date": appointment_date,
         "platform": "",
         "model_tag": "",
