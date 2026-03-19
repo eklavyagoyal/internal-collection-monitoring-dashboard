@@ -8,8 +8,6 @@ from ..components.campaign_card import campaign_card
 from ..components.stat_card import stat_card
 from ..components.design_tokens import (
     ACCENT,
-    ACCENT_GRADIENT_H,
-    ACCENT_LIGHT,
     ACCENT_SOFT,
     BG,
     BORDER,
@@ -28,7 +26,6 @@ from ..components.design_tokens import (
     TEXT,
     TRANSITION_FAST,
     glass_card,
-    progress_bar,
 )
 
 
@@ -213,27 +210,6 @@ def dashboard_page() -> rx.Component:
                 align="center",
                 width="100%",
                 flex_wrap="wrap",
-            ),
-            # -- Overall progress bar card
-            glass_card(
-                rx.hstack(
-                    rx.text(
-                        "Overall Progress", size="2", weight="medium",
-                        color=SUBTEXT,
-                    ),
-                    rx.spacer(),
-                    rx.text(
-                        NexusState.overall_progress, "%",
-                        size="2", weight="bold",
-                        color=ACCENT_LIGHT,
-                        font_variant_numeric="tabular-nums",
-                    ),
-                    width="100%",
-                ),
-                rx.box(height="8px"),
-                progress_bar(NexusState.overall_progress, height="6px"),
-                padding="16px 20px",
-                width="100%",
             ),
             # -- Campaign grid
             rx.cond(

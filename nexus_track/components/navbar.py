@@ -118,12 +118,16 @@ def navbar(breadcrumb: str = "") -> rx.Component:
                     ghost_icon_btn("plus"),
                     href="/new",
                     title="New Campaign",
+                    display="flex",
+                    align_items="center",
                 ),
                 # Settings link
                 rx.link(
                     ghost_icon_btn("settings"),
                     href="/settings",
                     title="Settings",
+                    display="flex",
+                    align_items="center",
                 ),
                 # Theme toggle
                 rx.icon_button(
