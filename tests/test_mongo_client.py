@@ -212,7 +212,7 @@ class TestManualParticipant:
         parts = await mc.get_participants_for_campaign(cid, "2024-06-15")
         assert len(parts) == 1
         assert parts[0]["issue_comment"] == ""
-        assert parts[0]["status"] == "Pending"
+        assert parts[0]["status"] == "Booked" # removed pending status, so manual starts as Booked 
 
 
 # ---------------------------------------------------------------------------
