@@ -112,6 +112,7 @@ class NexusState(rx.State):
     show_add_participant: bool = False
     add_name: str = ""
     add_email: str = ""
+    add_date: str = ""
     add_time: str = ""
 
     # SYNC
@@ -151,6 +152,14 @@ class NexusState(rx.State):
     show_delete_participant_dialog: bool = False
     delete_participant_event_id: str = ""
     delete_participant_name: str = ""
+
+    # EDIT PARTICIPANT
+    show_edit_participant: bool = False
+    edit_participant_eid: str = ""
+    edit_participant_name: str = ""
+    edit_participant_email: str = ""
+    edit_participant_date: str = ""
+    edit_participant_time: str = ""
 
     # BULK DELETE CONFIRMATION
     show_bulk_delete_dialog: bool = False
@@ -915,6 +924,46 @@ class NexusState(rx.State):
                 for p in self.participants
             ]
 
+    # EDIT PARTICIPANT
+
+    def open_edit_participant(self, event_id: str):
+        for p in self.participants:
+            if p.get("google_event_id") == event_id:
+                self.edit_participant_eid = event_id
+                self.edit_participant_name = p.get("name", "")
+                self.edit_participant_email = p.get("email", "")
+                self.edit_participant_date = p.get("appointment_date", "")
+                self.edit_participant_time = p.get("appointment_time", "")
+                self.show_edit_participant = True
+                break
+
+    def close_edit_participant(self):
+        self.show_edit_participant = False
+
+    def set_edit_participant_name(self, v: str):
+        self.edit_participant_name = v
+
+    def set_edit_participant_email(self, v: str):
+        self.edit_participant_email = v
+
+    def set_edit_participant_date(self, v: str):
+        self.edit_participant_date = v
+
+    def set_edit_participant_time(self, v: str):
+        self.edit_participant_time = v
+
+    async def save_edit_participant(self):
+        cid = self.active_campaign_id
+        eid = self.edit_participant_eid
+        if not cid or not eid:
+            return
+        await db_update_field(cid, eid, "name", self.edit_participant_name.strip())
+        await db_update_field(cid, eid, "email", self.edit_participant_email.strip())
+        await db_update_field(cid, eid, "appointment_date", self.edit_participant_date.strip())
+        await db_update_field(cid, eid, "appointment_time", self.edit_participant_time.strip())
+        self.show_edit_participant = False
+        await self._reload_participants()
+
     # ISSUE TRACKING
 
     def open_issue_editor(self, event_id: str):
@@ -972,6 +1021,7 @@ class NexusState(rx.State):
         self.show_add_participant = not self.show_add_participant
         self.add_name = ""
         self.add_email = ""
+        self.add_date = datetime.now().strftime("%Y-%m-%d")
         self.add_time = ""
 
     def set_add_name(self, v: str):
@@ -979,6 +1029,9 @@ class NexusState(rx.State):
 
     def set_add_email(self, v: str):
         self.add_email = v
+
+    def set_add_date(self, v: str):
+        self.add_date = v
 
     def set_add_time(self, v: str):
         self.add_time = v
@@ -988,17 +1041,17 @@ class NexusState(rx.State):
         if not name:
             return
         cid = self.active_campaign_id
-        date = self._get_date()
         await add_manual_participant(
             campaign_id=cid,
             name=name,
             email=self.add_email.strip(),
-            appointment_date=date,
+            appointment_date=self.add_date.strip(),
             appointment_time=self.add_time.strip(),
         )
         self.show_add_participant = False
         self.add_name = ""
         self.add_email = ""
+        self.add_date = ""
         self.add_time = ""
         await self._reload_participants()
 

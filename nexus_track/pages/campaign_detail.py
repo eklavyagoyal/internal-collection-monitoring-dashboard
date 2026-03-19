@@ -775,6 +775,17 @@ def _bulk_action_bar() -> rx.Component:
 # Add participant dialog
 # -----------------------------------------------------------------------
 
+_add_input_style = {
+    "width": "100%",
+    "padding": "6px 10px",
+    "border_radius": RADIUS_SM,
+    "border": BORDER,
+    "background": CARD_BG,
+    "color": "inherit",
+    "font_size": "13px",
+}
+
+
 def _add_participant_dialog() -> rx.Component:
     return rx.cond(
         NexusState.show_add_participant,
@@ -796,44 +807,45 @@ def _add_participant_dialog() -> rx.Component:
             rx.grid(
                 rx.vstack(
                     rx.text("Name *", size="2", weight="medium", color=SUBTEXT),
-                    rx.input(
+                    rx.el.input(
                         value=NexusState.add_name,
                         on_change=NexusState.set_add_name,
                         placeholder="Jane Doe",
-                        size="2",
-                        variant="surface",
-                        border_radius=RADIUS_SM,
-                        width="100%",
+                        style=_add_input_style,
                     ),
                     spacing="1",
                 ),
                 rx.vstack(
                     rx.text("Email", size="2", weight="medium", color=SUBTEXT),
-                    rx.input(
+                    rx.el.input(
                         value=NexusState.add_email,
                         on_change=NexusState.set_add_email,
                         placeholder="jane@example.com",
-                        size="2",
-                        variant="surface",
-                        border_radius=RADIUS_SM,
-                        width="100%",
+                        style=_add_input_style,
+                    ),
+                    spacing="1",
+                ),
+                rx.vstack(
+                    rx.text("Date", size="2", weight="medium", color=SUBTEXT),
+                    rx.el.input(
+                        type="date",
+                        value=NexusState.add_date,
+                        on_change=NexusState.set_add_date,
+                        style=_add_input_style,
                     ),
                     spacing="1",
                 ),
                 rx.vstack(
                     rx.text("Time", size="2", weight="medium", color=SUBTEXT),
-                    rx.input(
+                    rx.el.input(
+                        type="time",
                         value=NexusState.add_time,
                         on_change=NexusState.set_add_time,
-                        placeholder="14:30",
-                        size="2",
-                        variant="surface",
-                        border_radius=RADIUS_SM,
-                        width="100%",
+                        style=_add_input_style,
                     ),
                     spacing="1",
                 ),
-                columns="3",
+                columns="4",
                 spacing="3",
                 width="100%",
                 margin_top="12px",
@@ -933,6 +945,77 @@ def _bulk_delete_dialog() -> rx.Component:
             ),
         ),
         open=NexusState.show_bulk_delete_dialog,
+    )
+
+
+def _edit_participant_dialog() -> rx.Component:
+    _input_style = {
+        "width": "100%",
+        "padding": "6px 10px",
+        "border_radius": RADIUS_SM,
+        "border": BORDER,
+        "background": CARD_BG,
+        "color": "inherit",
+        "font_size": "13px",
+    }
+    return rx.alert_dialog.root(
+        rx.alert_dialog.content(
+            rx.alert_dialog.title("Edit Participant"),
+            rx.vstack(
+                rx.text("Name", size="1", weight="medium", color=SUBTEXT),
+                rx.el.input(
+                    value=NexusState.edit_participant_name,
+                    on_change=NexusState.set_edit_participant_name,
+                    style=_input_style,
+                ),
+                rx.text("Email", size="1", weight="medium", color=SUBTEXT),
+                rx.el.input(
+                    value=NexusState.edit_participant_email,
+                    on_change=NexusState.set_edit_participant_email,
+                    style=_input_style,
+                ),
+                rx.text("Date", size="1", weight="medium", color=SUBTEXT),
+                rx.el.input(
+                    type="date",
+                    value=NexusState.edit_participant_date,
+                    on_change=NexusState.set_edit_participant_date,
+                    style=_input_style,
+                ),
+                rx.text("Time", size="1", weight="medium", color=SUBTEXT),
+                rx.el.input(
+                    type="time",
+                    value=NexusState.edit_participant_time,
+                    on_change=NexusState.set_edit_participant_time,
+                    style=_input_style,
+                ),
+                spacing="2",
+                width="100%",
+            ),
+            rx.hstack(
+                rx.alert_dialog.cancel(
+                    rx.button(
+                        "Cancel",
+                        variant="soft",
+                        color_scheme="gray",
+                        on_click=NexusState.close_edit_participant,
+                        cursor="pointer",
+                    ),
+                ),
+                rx.alert_dialog.action(
+                    rx.button(
+                        "Save",
+                        color_scheme="iris",
+                        on_click=NexusState.save_edit_participant,
+                        cursor="pointer",
+                    ),
+                ),
+                spacing="3",
+                justify="end",
+                width="100%",
+                margin_top="16px",
+            ),
+        ),
+        open=NexusState.show_edit_participant,
     )
 
 
@@ -1207,6 +1290,8 @@ def campaign_detail_page() -> rx.Component:
         _participant_list(),
         # -- bulk delete dialog
         _bulk_delete_dialog(),
+        # -- edit participant dialog
+        _edit_participant_dialog(),
         # -- delete participant dialog
         _delete_participant_dialog(),
         # -- delete campaign dialog
