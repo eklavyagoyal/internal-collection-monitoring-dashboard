@@ -6,6 +6,7 @@ from ..state import NexusState
 from ..components.design_tokens import (
     ACCENT,
     ACCENT_GRADIENT,
+    ACCENT_SOFT,
     BORDER,
     CARD_BG,
     HEADING,
@@ -174,17 +175,48 @@ def edit_campaign_page() -> rx.Component:
             section_header(
                 "monitor-smartphone",
                 "Device Configuration",
-                "Set the device type and per-device participant quotas",
+                "Select the platforms and configure per-device participant quotas",
             ),
             rx.vstack(
                 rx.vstack(
-                    rx.text("Device Type", size="2", weight="medium", color=SUBTEXT),
-                    rx.select(
-                        ["Multi-device", "iOS", "Android", "Orb"],
-                        value=NexusState.form_device_type,
-                        on_change=NexusState.set_form_device_type,
-                        size="2",
-                        variant="surface",
+                    rx.text("Platforms *", size="2", weight="medium", color=SUBTEXT),
+                    rx.text(
+                        "Select one or more platforms this campaign will collect on.",
+                        size="1", color=SUBTEXT, font_style="italic",
+                    ),
+                    rx.flex(
+                        rx.foreach(
+                            NexusState.platform_options,
+                            lambda opt: rx.box(
+                                rx.hstack(
+                                    rx.icon(
+                                        rx.cond(opt.selected, "check-square", "square"),
+                                        size=16,
+                                        color=rx.cond(opt.selected, ACCENT, SUBTEXT),
+                                    ),
+                                    rx.text(opt.name, size="2", color=TEXT),
+                                    spacing="2",
+                                    align="center",
+                                ),
+                                padding="6px 12px",
+                                border_radius=RADIUS_SM,
+                                border=rx.cond(
+                                    opt.selected,
+                                    "1px solid " + ACCENT,
+                                    BORDER,
+                                ),
+                                background=rx.cond(
+                                    opt.selected,
+                                    ACCENT_SOFT,
+                                    "transparent",
+                                ),
+                                cursor="pointer",
+                                on_click=NexusState.set_form_device_type(opt.name),
+                            ),
+                        ),
+                        flex_wrap="wrap",
+                        gap="8px",
+                        width="100%",
                     ),
                     spacing="1",
                     width="100%",
@@ -220,6 +252,32 @@ def edit_campaign_page() -> rx.Component:
                         ),
                     ),
                     spacing="2",
+                    width="100%",
+                ),
+                rx.vstack(
+                    rx.text("Default Platform (optional)", size="2", weight="medium", color=SUBTEXT),
+                    rx.select(
+                        NexusState.platforms_with_none,
+                        value=NexusState.form_default_platform_display,
+                        on_change=NexusState.set_form_default_platform,
+                        placeholder="None (set manually)",
+                        size="2",
+                        variant="surface",
+                    ),
+                    spacing="1",
+                    width="100%",
+                ),
+                rx.vstack(
+                    rx.text("Default Model Tag (optional)", size="2", weight="medium", color=SUBTEXT),
+                    rx.select(
+                        NexusState.model_tags_with_none,
+                        value=NexusState.form_default_model_tag_display,
+                        on_change=NexusState.set_form_default_model_tag,
+                        placeholder="None (set manually)",
+                        size="2",
+                        variant="surface",
+                    ),
+                    spacing="1",
                     width="100%",
                 ),
                 spacing="3",

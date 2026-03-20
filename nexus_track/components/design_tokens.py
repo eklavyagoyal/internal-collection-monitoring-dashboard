@@ -422,13 +422,13 @@ def campaign_status_indicator(status) -> rx.Component:
             ),
         ),
         (
-            "archived",
+            "completed",
             rx.hstack(
                 rx.box(
                     width="6px", height="6px",
-                    border_radius="50%", bg="#94a3b8",
+                    border_radius="50%", bg="#8b5cf6",
                 ),
-                rx.text("Archived", size="1", weight="medium", color="#94a3b8"),
+                rx.text("Completed", size="1", weight="medium", color="#8b5cf6"),
                 spacing="2", align="center",
             ),
         ),

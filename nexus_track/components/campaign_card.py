@@ -36,7 +36,7 @@ def campaign_card(campaign: dict) -> rx.Component:
     goal = campaign["goal"].to(int)
     booked = campaign["booked"].to(int)
     completed_all = campaign["completed_all"].to(int)
-    device_type = campaign["device_type"].to(str)
+    device_types_display = campaign["device_types_display"].to(str)
 
     booked_pct = rx.cond(goal > 0, (booked * 100 / goal).to(int), 0)
     completed_pct = rx.cond(goal > 0, (completed_all * 100 / goal).to(int), 0)
@@ -52,13 +52,13 @@ def campaign_card(campaign: dict) -> rx.Component:
                 opacity="0.7",
             ),
             rx.vstack(
-                # -- Top: status + device type + goal fraction
+                # -- Top: status + device types + goal fraction
                 rx.hstack(
                     campaign_status_indicator(status),
                     rx.cond(
-                        device_type != "",
+                        device_types_display != "",
                         rx.badge(
-                            device_type,
+                            device_types_display,
                             size="1",
                             variant="soft",
                             color_scheme="blue",

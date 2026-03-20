@@ -83,6 +83,7 @@ def _label_section(
     set_new: callable,
     add_fn: callable,
     remove_fn: callable,
+    key_down_fn: callable = None,
 ) -> rx.Component:
     return glass_card(
         section_header(icon_name, title, description),
@@ -102,6 +103,7 @@ def _label_section(
                 placeholder="Add new " + title.lower().rstrip("s") + "...",
                 value=new_value,
                 on_change=set_new,
+                on_key_down=key_down_fn,
                 size="2",
                 variant="surface",
                 border_radius=RADIUS_MD,
@@ -258,6 +260,97 @@ def _booking_info() -> rx.Component:
 
 
 # ---------------------------------------------------------------------------
+# Model tags per platform (hierarchical)
+# ---------------------------------------------------------------------------
+
+def _model_tag_chip(platform: rx.Var[str], tag: rx.Var[str]) -> rx.Component:
+    return rx.box(
+        rx.hstack(
+            rx.text(tag, size="1", weight="medium", color=HEADING),
+            rx.icon_button(
+                rx.icon("x", size=10),
+                size="1",
+                variant="ghost",
+                color_scheme="red",
+                on_click=NexusState.remove_platform_model_tag(platform, tag),
+                cursor="pointer",
+                border_radius="50%",
+            ),
+            spacing="1",
+            align="center",
+        ),
+        padding_x="10px",
+        padding_y="5px",
+        border_radius=RADIUS_SM,
+        background=CARD_BG,
+        border=BORDER,
+    )
+
+
+def _platform_model_tags_row(config) -> rx.Component:
+    """Render model tags for one platform with add/remove."""
+    platform = config.platform
+    return rx.vstack(
+        rx.text(platform, size="2", weight="bold", color=HEADING),
+        rx.flex(
+            rx.foreach(
+                config.tags,
+                lambda tag: _model_tag_chip(platform, tag),
+            ),
+            wrap="wrap",
+            gap="6px",
+        ),
+        rx.hstack(
+            rx.input(
+                placeholder="Add model tag...",
+                value=config.input_value,
+                on_change=lambda v: NexusState.set_model_tag_input_for(platform, v),
+                on_key_down=lambda key: NexusState.handle_model_tag_key_down(platform, key),
+                size="1",
+                variant="surface",
+                border_radius=RADIUS_SM,
+                flex="1",
+            ),
+            rx.button(
+                rx.icon("plus", size=14),
+                "Add",
+                size="1",
+                variant="soft",
+                color_scheme="iris",
+                border_radius=RADIUS_SM,
+                on_click=NexusState.add_platform_model_tag(platform),
+                cursor="pointer",
+            ),
+            spacing="2",
+            width="100%",
+        ),
+        spacing="2",
+        width="100%",
+        padding="12px",
+        border_radius=RADIUS_MD,
+        background=ACCENT_SOFT,
+    )
+
+
+def _model_tags_per_platform_section() -> rx.Component:
+    return glass_card(
+        section_header(
+            "tag",
+            "Model Tags",
+            "Device models grouped by platform. E.g. iOS → iPhone 11, iPhone 12...",
+        ),
+        rx.vstack(
+            rx.foreach(
+                NexusState.platform_model_configs,
+                _platform_model_tags_row,
+            ),
+            spacing="3",
+            width="100%",
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Page
 # ---------------------------------------------------------------------------
 
@@ -301,19 +394,27 @@ def settings_page() -> rx.Component:
                 set_new=NexusState.set_new_platform,
                 add_fn=NexusState.add_platform,
                 remove_fn=NexusState.remove_platform,
+                key_down_fn=NexusState.handle_platform_key_down,
             ),
             _label_section(
-                title="Model Tags",
-                description="AI model versions being tested",
-                icon_name="tag",
-                labels=NexusState.model_tags,
-                new_value=NexusState.new_model_tag,
-                set_new=NexusState.set_new_model_tag,
-                add_fn=NexusState.add_model_tag,
-                remove_fn=NexusState.remove_model_tag,
+                title="Statuses",
+                description="Participant status labels",
+                icon_name="check",
+                labels=NexusState.statuses,
+                new_value=NexusState.new_status_label,
+                set_new=NexusState.set_new_status_label,
+                add_fn=NexusState.add_status_label,
+                remove_fn=NexusState.remove_status_label,
+                key_down_fn=NexusState.handle_status_key_down,
             ),
             columns=rx.breakpoints(initial="1", md="2"),
             spacing="4",
+            width="100%",
+        ),
+        # -- Model Tags per Platform (hierarchical)
+        rx.box(
+            _model_tags_per_platform_section(),
+            margin_top="16px",
             width="100%",
         ),
         # -- full-width cards

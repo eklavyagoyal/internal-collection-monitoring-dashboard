@@ -123,7 +123,7 @@ def dashboard_page() -> rx.Component:
                             align="center",
                         ),
                     ),
-                    # Show archived toggle
+                    # Show completed toggle
                     rx.hstack(
                         rx.switch(
                             checked=NexusState.show_archived,
@@ -132,7 +132,7 @@ def dashboard_page() -> rx.Component:
                             color_scheme="iris",
                         ),
                         rx.text(
-                            "Archived", size="1", color=SUBTEXT, weight="medium",
+                            "Completed", size="1", color=SUBTEXT, weight="medium",
                         ),
                         spacing="2",
                         align="center",
@@ -163,30 +163,24 @@ def dashboard_page() -> rx.Component:
             # -- Stat row
             rx.grid(
                 stat_card(
-                    "Campaigns",
-                    NexusState.campaigns.length(),
+                    "Total",
+                    NexusState.all_campaigns_count,
                     "layers",
                     "#6366f1",
                 ),
                 stat_card(
                     "Active",
-                    NexusState.active_campaign_count,
+                    NexusState.all_active_count,
                     "zap",
                     "#22c55e",
                 ),
                 stat_card(
-                    "Participants",
-                    NexusState.total_participants_today,
-                    "users",
-                    "#3b82f6",
-                ),
-                stat_card(
                     "Completed",
-                    NexusState.total_completed_today,
+                    NexusState.all_completed_count,
                     "circle-check-big",
                     "#8b5cf6",
                 ),
-                columns=rx.breakpoints(initial="2", sm="4"),
+                columns=rx.breakpoints(initial="3", sm="3"),
                 spacing="3",
                 width="100%",
             ),
@@ -196,7 +190,6 @@ def dashboard_page() -> rx.Component:
                 _device_chip("iOS", "iOS"),
                 _device_chip("Android", "Android"),
                 _device_chip("Orb", "Orb"),
-                _device_chip("Multi-device", "Multi-device"),
                 rx.spacer(),
                 rx.select(
                     ["created_at", "name", "device_type", "progress"],

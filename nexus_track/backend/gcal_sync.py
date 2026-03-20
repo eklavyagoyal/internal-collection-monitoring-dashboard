@@ -250,6 +250,8 @@ async def sync_calendar_for_campaign(
                 email=e["email"],
                 appointment_time=e["appointment_time"],
                 appointment_date=target_date,
+                default_platform=campaign.get("default_platform", ""),
+                default_model_tag=campaign.get("default_model_tag", ""),
             )
         total_synced += len(events)
 

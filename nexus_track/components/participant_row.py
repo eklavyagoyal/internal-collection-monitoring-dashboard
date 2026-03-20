@@ -108,7 +108,7 @@ def participant_row(p: dict) -> rx.Component:
                 flex_shrink="0",
             ),
             rx.select(
-                NexusState.model_tags,
+                NexusState.all_model_tags,
                 value=model_tag,
                 placeholder="Model",
                 on_change=lambda v: NexusState.set_model_tag(eid, v),

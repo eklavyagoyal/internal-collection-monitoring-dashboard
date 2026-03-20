@@ -24,7 +24,7 @@ _client: AsyncIOMotorClient | None = None
 DEFAULT_PLATFORMS = ["Orb", "Kiosk-v1", "Kiosk-v2", "Self-Serve", "Other"]
 DEFAULT_MODEL_TAGS = ["v4.5", "v4.6", "v5.0", "beta"]
 DEFAULT_STATUSES = ["Booked", "Completed"]
-DEFAULT_DEVICE_TYPES = ["iOS", "Android", "Orb", "Multi-device"]
+DEFAULT_DEVICE_TYPES = ["iOS", "Android", "Orb"]
 
 
 def _get_client() -> AsyncIOMotorClient:
@@ -82,6 +82,12 @@ async def ensure_indexes() -> None:
         {"$set": {"status": "Booked"}},
     )
 
+    # Migrate legacy "archived" campaigns to "completed"
+    await _campaigns().update_many(
+        {"status": "archived"},
+        {"$set": {"status": "completed"}},
+    )
+
 
 # =========================================================================
 # Settings CRUD (label management)
@@ -100,6 +106,7 @@ async def get_settings() -> dict:
         "model_tags": DEFAULT_MODEL_TAGS,
         "statuses": DEFAULT_STATUSES,
         "admin_pin_hash": "",
+        "platform_model_tags": {},
     }
     await _settings().insert_one(defaults)
     defaults["_id"] = str(defaults.get("_id", ""))
@@ -113,6 +120,15 @@ async def update_label_list(label_type: str, values: list[str]) -> None:
     await _settings().update_one(
         {"_key": "labels"},
         {"$set": {label_type: values}},
+        upsert=True,
+    )
+
+
+async def update_platform_model_tags(data: dict) -> None:
+    """Persist the platform_model_tags mapping {platform: [model_tag, ...]}."""
+    await _settings().update_one(
+        {"_key": "labels"},
+        {"$set": {"platform_model_tags": data}},
         upsert=True,
     )
 
@@ -170,8 +186,10 @@ async def create_campaign(data: dict) -> str:
         "linear_url": data.get("linear_url", ""),
         "deadline": data.get("deadline", ""),
         "goal": goal,
-        "device_type": data.get("device_type", "Multi-device"),
+        "device_types": data.get("device_types", []),
         "device_quota": device_quota,
+        "default_platform": data.get("default_platform", ""),
+        "default_model_tag": data.get("default_model_tag", ""),
         # calendar_ids is a list of {calendar_id, filter} objects
         "calendar_ids": data.get("calendar_ids", []),
         # legacy single-calendar fields kept for backward compat
@@ -192,7 +210,8 @@ async def update_campaign(campaign_id: str, data: dict) -> None:
         "name", "description", "booking_url",
         "notion_url", "linear_url", "deadline",
         "calendar_id", "calendar_filter", "calendar_ids", "status",
-        "goal", "device_type", "device_quota",
+        "goal", "device_types", "device_quota",
+        "default_platform", "default_model_tag",
     }
     sets = {k: v for k, v in data.items() if k in allowed}
 
@@ -216,8 +235,18 @@ def _backfill_campaign(doc: dict) -> dict:
     doc.setdefault("notion_url", "")
     doc.setdefault("linear_url", "")
     doc.setdefault("deadline", "")
-    doc.setdefault("device_type", "Multi-device")
+    # Backfill: migrate legacy device_type (str) to device_types (list)
+    if "device_types" not in doc:
+        legacy = doc.pop("device_type", "")
+        if legacy and legacy != "Multi-device":
+            doc["device_types"] = [legacy]
+        else:
+            doc["device_types"] = []
     doc.setdefault("device_quota", {})
+    doc.setdefault("default_platform", "")
+    doc.setdefault("default_model_tag", "")
+    # Pre-compute display string for the card badge
+    doc["device_types_display"] = ", ".join(doc.get("device_types", []))
     return doc
 
 
@@ -229,6 +258,15 @@ async def get_all_campaigns() -> list[dict]:
         _backfill_campaign(doc)
         out.append(doc)
     return out
+
+
+async def count_all_campaigns() -> dict:
+    """Return total, active, and completed campaign counts (includes archived)."""
+    all_camps = await get_all_campaigns()
+    total = len(all_camps)
+    active = sum(1 for c in all_camps if c.get("status") == "active")
+    completed = sum(1 for c in all_camps if c.get("status") == "completed")
+    return {"total": total, "active": active, "completed": completed}
 
 
 async def get_campaign(campaign_id: str) -> dict | None:
@@ -314,7 +352,7 @@ async def get_all_campaigns_with_stats(
     """
     campaigns = await get_all_campaigns()
     if not include_archived:
-        campaigns = [c for c in campaigns if c.get("status") != "archived"]
+        campaigns = [c for c in campaigns if c.get("status") != "completed"]
     if date is None:
         date = datetime.now().strftime("%Y-%m-%d")
     for c in campaigns:
@@ -343,6 +381,7 @@ async def get_all_campaigns_with_stats(
 async def upsert_participant(
     campaign_id: str, event_id: str, name: str, email: str,
     appointment_time: str, appointment_date: str,
+    default_platform: str = "", default_model_tag: str = "",
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
     await _participants().update_one(
@@ -357,7 +396,7 @@ async def upsert_participant(
             "$setOnInsert": {
                 "campaign_id": campaign_id,
                 "google_event_id": event_id,
-                "platform": "", "model_tag": "",
+                "platform": default_platform, "model_tag": default_model_tag,
                 "status": "Booked", "notes": "",
                 "issue_comment": "",
                 "start_time": None, "end_time": None,
@@ -427,6 +466,8 @@ async def add_manual_participant(
     email: str,
     appointment_date: str,
     appointment_time: str = "",
+    default_platform: str = "",
+    default_model_tag: str = "",
 ) -> str:
     """Insert a participant manually (not from calendar).
 
@@ -441,8 +482,8 @@ async def add_manual_participant(
         "email": email,
         "appointment_time": appointment_time or "",
         "appointment_date": appointment_date,
-        "platform": "",
-        "model_tag": "",
+        "platform": default_platform,
+        "model_tag": default_model_tag,
         "status": "Booked",
         "notes": "",
         "issue_comment": "",
@@ -560,6 +601,35 @@ async def get_per_device_progress(campaign_id: str) -> dict[str, dict]:
     return result
 
 
+async def get_platform_model_breakdown(campaign_id: str) -> dict:
+    """Return per-platform, per-model participant counts.
+
+    Returns ``{platform: {model_tag: {total: N, completed: N}}}``.
+    Only includes participants that have a non-empty platform field.
+    """
+    pipeline = [
+        {"$match": {"campaign_id": campaign_id, "platform": {"$ne": ""}}},
+        {"$group": {
+            "_id": {"platform": "$platform", "model_tag": "$model_tag"},
+            "total": {"$sum": 1},
+            "completed": {
+                "$sum": {"$cond": [{"$eq": ["$status", "Completed"]}, 1, 0]},
+            },
+        }},
+    ]
+    result: dict[str, dict[str, dict]] = {}
+    async for doc in _participants().aggregate(pipeline):
+        platform = doc["_id"]["platform"]
+        model = doc["_id"].get("model_tag") or ""
+        if platform not in result:
+            result[platform] = {}
+        result[platform][model] = {
+            "total": doc["total"],
+            "completed": doc["completed"],
+        }
+    return result
+
+
 # =========================================================================
 # Campaign cloning
 # =========================================================================
@@ -577,8 +647,10 @@ async def clone_campaign(campaign_id: str) -> str | None:
         "linear_url": source.get("linear_url", ""),
         "deadline": source.get("deadline", ""),
         "goal": source.get("goal", 100),
-        "device_type": source.get("device_type", "Multi-device"),
+        "device_types": source.get("device_types", []),
         "device_quota": source.get("device_quota", {}),
+        "default_platform": source.get("default_platform", ""),
+        "default_model_tag": source.get("default_model_tag", ""),
         "calendar_id": source.get("calendar_id", "primary"),
         "calendar_filter": source.get("calendar_filter", ""),
         "calendar_ids": source.get("calendar_ids", []),

@@ -19,7 +19,7 @@ import reflex as rx
 from .backend.gcal_sync import list_calendars, sync_calendar_for_campaign, sync_campaign_date_range
 from .backend.mongo_client import (
     add_manual_participant,
-    archive_campaign as db_archive_campaign,
+    count_all_campaigns,
     bulk_delete_participants as db_bulk_delete,
     bulk_update_participant_field as db_bulk_update,
     clone_campaign as db_clone_campaign,
@@ -34,14 +34,15 @@ from .backend.mongo_client import (
     get_participants_for_campaign,
     get_participants_for_export,
     get_per_device_progress,
+    get_platform_model_breakdown,
     get_settings,
     set_admin_pin as db_set_admin_pin,
-    unarchive_campaign as db_unarchive_campaign,
     update_campaign as db_update_campaign,
     update_campaign_field as db_update_campaign_field,
     update_label_list,
     update_participant_field as db_update_field,
     update_participant_status as db_update_status,
+    update_platform_model_tags as db_update_platform_model_tags,
 )
 
 log = logging.getLogger(__name__)
@@ -49,17 +50,70 @@ log = logging.getLogger(__name__)
 _auto_refresh_running = False
 
 
+def _to_plain_python(obj):
+    """Recursively convert MutableProxy and other Reflex proxies to plain Python objects."""
+    if obj is None:
+        return None
+    # Check if it's a MutableProxy or similar Reflex proxy type
+    obj_type_name = type(obj).__name__
+    if "Proxy" in obj_type_name or "ImmutableProxy" in obj_type_name:
+        # Convert to the underlying type
+        if hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
+            try:
+                if isinstance(obj, dict):
+                    return {k: _to_plain_python(v) for k, v in obj.items()}
+                else:
+                    return [_to_plain_python(item) for item in obj]
+            except (TypeError, AttributeError):
+                return obj
+        return obj
+    elif isinstance(obj, dict):
+        return {k: _to_plain_python(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_to_plain_python(item) for item in obj]
+    return obj
+
+
+class BreakdownModel(rx.Base):
+    model: str = ""
+    total: int = 0
+    completed: int = 0
+    pct: int = 0
+
+
+class BreakdownPlatform(rx.Base):
+    platform: str = ""
+    total: int = 0
+    completed: int = 0
+    pct: int = 0
+    near_full: bool = False
+    is_expanded: bool = False
+    models: list[BreakdownModel] = []
+
+
+class PlatformModelConfig(rx.Base):
+    platform: str = ""
+    tags: list[str] = []
+    input_value: str = ""
+
+
+class PlatformOption(rx.Base):
+    name: str = ""
+    selected: bool = False
+
+
 class NexusState(rx.State):
     """Single state class for the entire multi-page app."""
 
     # SETTINGS / LABELS
     platforms: list[str] = ["Orb", "Kiosk-v1", "Kiosk-v2", "Self-Serve", "Other"]
-    model_tags: list[str] = ["v4.5", "v4.6", "v5.0", "beta"]
     statuses: list[str] = ["Booked", "Completed"]
 
     new_platform: str = ""
     new_model_tag: str = ""
     new_status_label: str = ""
+    model_tag_add_platform: str = ""
+    model_tag_inputs: dict = {}
 
     available_calendars: list[dict] = []
     calendars_loading: bool = False
@@ -76,6 +130,9 @@ class NexusState(rx.State):
 
     # DASHBOARD
     campaigns: list[dict] = []
+    all_campaigns_count: int = 0
+    all_active_count: int = 0
+    all_completed_count: int = 0
     campaign_search_query: str = ""
     show_archived: bool = False
     campaign_device_filter: str = ""
@@ -90,6 +147,10 @@ class NexusState(rx.State):
     participants: list[dict] = []
     search_query: str = ""
     per_device_stats: dict = {}
+    platform_model_breakdown: dict = {}
+    platform_model_tags: dict = {}
+    expanded_platform_panels: list[str] = []
+    device_breakdown_open: bool = False
 
     # SORTING
     sort_field: str = "appointment_time"
@@ -133,8 +194,10 @@ class NexusState(rx.State):
     form_error: str = ""
     form_is_edit: bool = False
     form_edit_campaign_id: str = ""
-    form_device_type: str = "Multi-device"
+    form_device_types: list[str] = []
     form_device_quota: dict = {}
+    form_default_platform: str = ""
+    form_default_model_tag: str = ""
 
     # ISSUE TRACKING
     editing_issue_event_id: str = ""
@@ -176,6 +239,35 @@ class NexusState(rx.State):
     @rx.var(cache=True)
     def completed_count(self) -> int:
         return sum(1 for p in self.participants if p.get("status") == "Completed")
+
+    @rx.var(cache=True)
+    def avg_session_minutes(self) -> int:
+        """Mean duration (minutes) of completed sessions with timestamps."""
+        durations = []
+        for p in self.participants:
+            st, et = p.get("start_time"), p.get("end_time")
+            if st and et:
+                try:
+                    d = (datetime.fromisoformat(et) - datetime.fromisoformat(st)).total_seconds() / 60
+                    if 0 < d < 480:
+                        durations.append(d)
+                except Exception:
+                    pass
+        if len(durations) < 3:
+            return 0
+        return int(sum(durations) / len(durations))
+
+    @rx.var(cache=True)
+    def eta_finish_today(self) -> str:
+        """Estimated finish time based on avg session duration and remaining bookings."""
+        avg = self.avg_session_minutes
+        if avg <= 0:
+            return ""
+        remaining = self.booked_count
+        if remaining <= 0:
+            return ""
+        eta = datetime.now() + timedelta(minutes=remaining * avg)
+        return "~" + eta.strftime("%H:%M")
 
     @rx.var(cache=True)
     def booked_count(self) -> int:
@@ -344,12 +436,64 @@ class NexusState(rx.State):
         return self.current_campaign.get("status", "active")
 
     @rx.var(cache=True)
-    def campaign_device_type(self) -> str:
-        return self.current_campaign.get("device_type", "Multi-device")
+    def campaign_device_types(self) -> list[str]:
+        return self.current_campaign.get("device_types", [])
 
     @rx.var(cache=True)
     def campaign_device_quota(self) -> dict:
         return self.current_campaign.get("device_quota", {})
+
+    @rx.var(cache=True)
+    def platform_breakdown_for_render(self) -> list[BreakdownPlatform]:
+        """List of platform items with typed nested model lists for rendering."""
+        breakdown = self.platform_model_breakdown  # {platform: {model: {total, completed}}}
+        config = self.platform_model_tags           # {platform: [model_tags]}
+        expanded = set(self.expanded_platform_panels)
+
+        # Filter to only platforms selected for this campaign
+        campaign_platforms = set(self.current_campaign.get("device_types", []))
+
+        all_platforms = sorted(set(breakdown.keys()) | set(config.keys()))
+        # If campaign has selected platforms, only show those
+        if campaign_platforms:
+            all_platforms = [p for p in all_platforms if p in campaign_platforms]
+        result: list[BreakdownPlatform] = []
+        for platform in all_platforms:
+            models_data = breakdown.get(platform, {})
+            configured_models = config.get(platform, [])
+            all_models = sorted(set(models_data.keys()) | set(configured_models))
+
+            platform_total = sum(v.get("total", 0) for v in models_data.values())
+            platform_completed = sum(v.get("completed", 0) for v in models_data.values())
+            platform_pct = int(platform_completed / platform_total * 100) if platform_total else 0
+            near_full = platform_total > 0 and platform_completed >= platform_total * 0.9
+            is_expanded = platform in expanded
+
+            models: list[BreakdownModel] = []
+            if is_expanded:
+                for model in all_models:
+                    v = models_data.get(model, {"total": 0, "completed": 0})
+                    total = v.get("total", 0)
+                    completed = v.get("completed", 0)
+                    pct = int(completed / total * 100) if total else 0
+                    models.append(BreakdownModel(
+                        model=model or "(no model)",
+                        total=total,
+                        completed=completed,
+                        pct=pct,
+                    ))
+
+            result.append(BreakdownPlatform(
+                platform=platform,
+                total=platform_total,
+                completed=platform_completed,
+                pct=platform_pct,
+                near_full=near_full,
+                is_expanded=is_expanded,
+                models=models,
+            ))
+
+        return result
 
     @rx.var(cache=True)
     def active_filter_count(self) -> int:
@@ -416,7 +560,7 @@ class NexusState(rx.State):
         if self.campaign_device_filter:
             items = [
                 c for c in items
-                if c.get("device_type", "Multi-device") == self.campaign_device_filter
+                if self.campaign_device_filter in c.get("device_types", [])
             ]
 
         # Sort
@@ -424,7 +568,7 @@ class NexusState(rx.State):
         if sf == "name":
             items = sorted(items, key=lambda c: c.get("name", "").lower())
         elif sf == "device_type":
-            items = sorted(items, key=lambda c: c.get("device_type", ""))
+            items = sorted(items, key=lambda c: ", ".join(c.get("device_types", [])))
         elif sf == "progress":
             items = sorted(
                 items,
@@ -466,43 +610,143 @@ class NexusState(rx.State):
 
     # SETTINGS / LABELS
 
+    @rx.var(cache=True)
+    def platforms_with_none(self) -> list[str]:
+        return ["__none__"] + list(self.platforms)
+
+    @rx.var(cache=True)
+    def platform_options(self) -> list[PlatformOption]:
+        """Platforms with selected state for the campaign form checkboxes."""
+        selected = set(self.form_device_types)
+        return [
+            PlatformOption(name=p, selected=p in selected)
+            for p in self.platforms
+        ]
+
+    @rx.var(cache=True)
+    def all_model_tags(self) -> list[str]:
+        """Flat list of all model tags across all platforms."""
+        tags: list[str] = []
+        for models in self.platform_model_tags.values():
+            if isinstance(models, list):
+                for t in models:
+                    if t and t not in tags:
+                        tags.append(t)
+        return sorted(tags)
+
+    @rx.var(cache=True)
+    def model_tags_with_none(self) -> list[str]:
+        return ["__none__"] + self.all_model_tags
+
+    @rx.var(cache=True)
+    def platform_model_configs(self) -> list[PlatformModelConfig]:
+        """Typed list for rendering model tags per platform in settings."""
+        result: list[PlatformModelConfig] = []
+        # Convert MutableProxy dicts to plain dicts to avoid .get() failures
+        pmt = dict(self.platform_model_tags) if self.platform_model_tags else {}
+        mti = dict(self.model_tag_inputs) if self.model_tag_inputs else {}
+        for platform in self.platforms:
+            tags = pmt.get(platform, [])
+            result.append(PlatformModelConfig(
+                platform=platform,
+                tags=list(tags) if isinstance(tags, list) else [],
+                input_value=mti.get(platform, ""),
+            ))
+        return result
+
+    @rx.var(cache=True)
+    def form_default_platform_display(self) -> str:
+        """Convert empty string to sentinel for select display."""
+        return "__none__" if self.form_default_platform == "" else self.form_default_platform
+
+    @rx.var(cache=True)
+    def form_default_model_tag_display(self) -> str:
+        """Convert empty string to sentinel for select display."""
+        return "__none__" if self.form_default_model_tag == "" else self.form_default_model_tag
+
     async def load_settings(self):
         doc = await get_settings()
         self.platforms = doc.get("platforms", self.platforms)
-        self.model_tags = doc.get("model_tags", self.model_tags)
         self.statuses = doc.get("statuses", self.statuses)
         self.has_admin_pin = bool(doc.get("admin_pin_hash", ""))
+        self.platform_model_tags = doc.get("platform_model_tags", {})
 
     def set_new_platform(self, v: str):
         self.new_platform = v
+
+    async def handle_platform_key_down(self, key: str):
+        if key == "Enter":
+            await self.add_platform()
 
     async def add_platform(self):
         v = self.new_platform.strip()
         if v and v not in self.platforms:
             self.platforms = list(self.platforms) + [v]
             await update_label_list("platforms", list(self.platforms))
+            # Ensure the new platform has an entry in platform_model_tags
+            pmt = dict(self.platform_model_tags)
+            if v not in pmt:
+                pmt[v] = []
+                self.platform_model_tags = pmt
+                await db_update_platform_model_tags(_to_plain_python(pmt))
         self.new_platform = ""
 
     async def remove_platform(self, label: str):
         self.platforms = [p for p in self.platforms if p != label]
         await update_label_list("platforms", list(self.platforms))
+        # Also remove from platform_model_tags
+        pmt = dict(self.platform_model_tags)
+        pmt.pop(label, None)
+        self.platform_model_tags = pmt
+        await db_update_platform_model_tags(_to_plain_python(pmt))
 
     def set_new_model_tag(self, v: str):
         self.new_model_tag = v
 
-    async def add_model_tag(self):
-        v = self.new_model_tag.strip()
-        if v and v not in self.model_tags:
-            self.model_tags = list(self.model_tags) + [v]
-            await update_label_list("model_tags", list(self.model_tags))
-        self.new_model_tag = ""
+    def set_model_tag_add_platform(self, v: str):
+        self.model_tag_add_platform = v
 
-    async def remove_model_tag(self, label: str):
-        self.model_tags = [t for t in self.model_tags if t != label]
-        await update_label_list("model_tags", list(self.model_tags))
+    def set_model_tag_input_for(self, platform: str, value: str):
+        """Update the per-platform text input value (isolated, no cross-contamination)."""
+        inputs = dict(self.model_tag_inputs)
+        inputs[platform] = value
+        self.model_tag_inputs = inputs
+
+    async def handle_model_tag_key_down(self, platform: str, key: str):
+        if key == "Enter":
+            await self.add_platform_model_tag(platform)
+
+    async def add_platform_model_tag(self, platform: str):
+        """Add a model tag under a specific platform."""
+        v = self.model_tag_inputs.get(platform, "").strip()
+        if not v:
+            return
+        pmt = dict(self.platform_model_tags)
+        existing = list(pmt.get(platform, []))
+        if v not in existing:
+            existing.append(v)
+            pmt[platform] = existing
+            self.platform_model_tags = pmt
+            await db_update_platform_model_tags(_to_plain_python(pmt))
+        inputs = dict(self.model_tag_inputs)
+        inputs[platform] = ""
+        self.model_tag_inputs = inputs
+
+    async def remove_platform_model_tag(self, platform: str, tag: str):
+        """Remove a model tag from a specific platform."""
+        pmt = dict(self.platform_model_tags)
+        existing = list(pmt.get(platform, []))
+        existing = [t for t in existing if t != tag]
+        pmt[platform] = existing
+        self.platform_model_tags = pmt
+        await db_update_platform_model_tags(_to_plain_python(pmt))
 
     def set_new_status_label(self, v: str):
         self.new_status_label = v
+
+    async def handle_status_key_down(self, key: str):
+        if key == "Enter":
+            await self.add_status_label()
 
     async def add_status_label(self):
         v = self.new_status_label.strip()
@@ -626,7 +870,28 @@ class NexusState(rx.State):
         cid = self.active_campaign_id
         if cid:
             self.participants = await get_participants_for_campaign(cid)
+            self.platform_model_breakdown = await get_platform_model_breakdown(cid)
             self.selected_ids = []
+            # Auto-complete campaign when goal is reached
+            await self._check_auto_complete()
+
+    async def _check_auto_complete(self):
+        """Mark campaign as completed when completed participants reach the goal."""
+        cid = self.active_campaign_id
+        if not cid:
+            return
+        status = self.current_campaign.get("status", "active")
+        if status == "completed":
+            return
+        progress = await get_campaign_progress(cid)
+        goal = int(self.current_campaign.get("goal", 100))
+        if goal > 0 and progress["completed"] >= goal:
+            await db_update_campaign_field(cid, "status", "completed")
+            camp = dict(self.current_campaign)
+            camp["status"] = "completed"
+            camp["booked"] = progress["booked"]
+            camp["completed_all"] = progress["completed"]
+            self.current_campaign = camp
 
     async def navigate_prev_day(self):
         self.go_prev_day()
@@ -647,6 +912,10 @@ class NexusState(rx.State):
         self.campaigns = await get_all_campaigns_with_stats(
             date, include_archived=self.show_archived,
         )
+        counts = await count_all_campaigns()
+        self.all_campaigns_count = counts["total"]
+        self.all_active_count = counts["active"]
+        self.all_completed_count = counts["completed"]
         self.is_loading = False
 
     def set_campaign_search(self, q: str):
@@ -687,10 +956,16 @@ class NexusState(rx.State):
                 self.current_campaign = campaign
                 self.participants = await get_participants_for_campaign(cid)
                 self.per_device_stats = await get_per_device_progress(cid)
+                breakdown = await get_platform_model_breakdown(cid)
+                self.platform_model_breakdown = breakdown
+                self.device_breakdown_open = True
+                self.expanded_platform_panels = self._all_visible_platforms()
             else:
                 self.current_campaign = {}
                 self.participants = []
                 self.per_device_stats = {}
+                self.platform_model_breakdown = {}
+                self.expanded_platform_panels = []
         self.is_loading = False
 
     # SORTING
@@ -742,34 +1017,44 @@ class NexusState(rx.State):
     def clear_selection(self):
         self.selected_ids = []
 
-    # CAMPAIGN STATUS TOGGLE
+    def _all_visible_platforms(self) -> list[str]:
+        """Compute the set of platforms visible in the breakdown panel."""
+        all_platforms = sorted(
+            set(self.platform_model_breakdown.keys()) | set(self.platform_model_tags.keys())
+        )
+        campaign_platforms = set(self.current_campaign.get("device_types", []))
+        if campaign_platforms:
+            all_platforms = [p for p in all_platforms if p in campaign_platforms]
+        return all_platforms
 
-    async def toggle_campaign_status(self):
+    def toggle_platform_panel(self, platform: str):
+        """Expand or collapse a platform card in the breakdown panel."""
+        if platform in self.expanded_platform_panels:
+            self.expanded_platform_panels = [p for p in self.expanded_platform_panels if p != platform]
+        else:
+            self.expanded_platform_panels = list(self.expanded_platform_panels) + [platform]
+
+    def toggle_device_breakdown(self):
+        """Toggle the Device & Model Breakdown panel. Opening expands all submenus, closing collapses all."""
+        self.device_breakdown_open = not self.device_breakdown_open
+        if self.device_breakdown_open:
+            self.expanded_platform_panels = self._all_visible_platforms()
+        else:
+            self.expanded_platform_panels = []
+
+    # CAMPAIGN STATUS
+
+    async def set_campaign_status(self, new_status: str):
         cid = self.active_campaign_id
         if not cid:
             return
-        cur = self.current_campaign.get("status", "active")
-        new_status = "paused" if cur == "active" else "active"
         await db_update_campaign_field(cid, "status", new_status)
         campaign = await get_campaign(cid)
         if campaign:
+            progress = await get_campaign_progress(cid)
+            campaign["booked"] = progress["booked"]
+            campaign["completed_all"] = progress["completed"]
             self.current_campaign = campaign
-
-    # ARCHIVE CAMPAIGN
-
-    async def archive_campaign(self):
-        cid = self.active_campaign_id
-        if cid:
-            await db_archive_campaign(cid)
-            return rx.redirect("/")
-
-    async def unarchive_campaign(self):
-        cid = self.active_campaign_id
-        if cid:
-            await db_unarchive_campaign(cid)
-            campaign = await get_campaign(cid)
-            if campaign:
-                self.current_campaign = campaign
 
     # CALENDAR SYNC (background)
 
@@ -790,8 +1075,10 @@ class NexusState(rx.State):
             await _ucf(cid, "last_sync_at", datetime.now().isoformat())
             fresh = await get_participants_for_campaign(cid)
             progress = await get_campaign_progress(cid)
+            breakdown = await get_platform_model_breakdown(cid)
             async with self:
                 self.participants = fresh
+                self.platform_model_breakdown = breakdown
                 camp = dict(self.current_campaign)
                 camp["booked"] = progress["booked"]
                 camp["completed_all"] = progress["completed"]
@@ -839,8 +1126,10 @@ class NexusState(rx.State):
             fresh = await get_participants_for_campaign(cid)
             # Refresh overall progress
             progress = await get_campaign_progress(cid)
+            breakdown = await get_platform_model_breakdown(cid)
             async with self:
                 self.participants = fresh
+                self.platform_model_breakdown = breakdown
                 camp = dict(self.current_campaign)
                 camp["booked"] = progress["booked"]
                 camp["completed_all"] = progress["completed"]
@@ -874,12 +1163,18 @@ class NexusState(rx.State):
                 fresh_campaigns = await get_all_campaigns_with_stats(
                     date, include_archived=show_arch,
                 )
+                counts = await count_all_campaigns()
                 async with self:
                     self.campaigns = fresh_campaigns
+                    self.all_campaigns_count = counts["total"]
+                    self.all_active_count = counts["active"]
+                    self.all_completed_count = counts["completed"]
                 if cid:
                     fresh = await get_participants_for_campaign(cid)
+                    breakdown = await get_platform_model_breakdown(cid)
                     async with self:
                         self.participants = fresh
+                        self.platform_model_breakdown = breakdown
             except Exception:
                 pass
 
@@ -1047,6 +1342,8 @@ class NexusState(rx.State):
             email=self.add_email.strip(),
             appointment_date=self.add_date.strip(),
             appointment_time=self.add_time.strip(),
+            default_platform=self.current_campaign.get("default_platform", ""),
+            default_model_tag=self.current_campaign.get("default_model_tag", ""),
         )
         self.show_add_participant = False
         self.add_name = ""
@@ -1163,7 +1460,21 @@ class NexusState(rx.State):
         self.form_deadline = v
 
     def set_form_device_type(self, v: str):
-        self.form_device_type = v
+        """Toggle a platform in the selected device types list."""
+        current = list(self.form_device_types)
+        if v in current:
+            current.remove(v)
+        else:
+            current.append(v)
+        self.form_device_types = current
+
+    def set_form_default_platform(self, v: str):
+        # Convert sentinel "__none__" back to empty string
+        self.form_default_platform = "" if v == "__none__" else v
+
+    def set_form_default_model_tag(self, v: str):
+        # Convert sentinel "__none__" back to empty string
+        self.form_default_model_tag = "" if v == "__none__" else v
 
     def set_form_device_quota_value(self, key_value: str):
         """Set a single device quota entry. Format: 'device_name:quota_int'."""
@@ -1191,8 +1502,10 @@ class NexusState(rx.State):
         self.form_error = ""
         self.form_is_edit = False
         self.form_edit_campaign_id = ""
-        self.form_device_type = "Multi-device"
+        self.form_device_types = []
         self.form_device_quota = {}
+        self.form_default_platform = ""
+        self.form_default_model_tag = ""
 
     async def load_edit_campaign(self):
         cid = self.router.page.params.get("campaign_id", "")
@@ -1213,13 +1526,18 @@ class NexusState(rx.State):
         self.form_goal = str(campaign.get("goal", 100))
         self.form_calendar_id = campaign.get("calendar_id", "primary")
         self.form_calendar_filter = campaign.get("calendar_filter", "")
-        self.form_device_type = campaign.get("device_type", "Multi-device")
+        self.form_device_types = campaign.get("device_types", [])
         self.form_device_quota = campaign.get("device_quota", {})
+        self.form_default_platform = campaign.get("default_platform", "")
+        self.form_default_model_tag = campaign.get("default_model_tag", "")
         self.form_error = ""
 
     async def create_campaign(self):
         if not self.form_name.strip():
             self.form_error = "Campaign name is required."
+            return
+        if not self.form_device_types:
+            self.form_error = "At least one platform must be selected."
             return
         cid = await db_create_campaign({
             "name": self.form_name.strip(),
@@ -1231,8 +1549,10 @@ class NexusState(rx.State):
             "goal": self.form_goal.strip() or "100",
             "calendar_id": self.form_calendar_id.strip() or "primary",
             "calendar_filter": self.form_calendar_filter.strip(),
-            "device_type": self.form_device_type or "Multi-device",
+            "device_types": list(self.form_device_types),
             "device_quota": dict(self.form_device_quota),
+            "default_platform": self.form_default_platform,
+            "default_model_tag": self.form_default_model_tag,
         })
         self.clear_form()
         return rx.redirect(f"/campaign/{cid}")
@@ -1240,6 +1560,9 @@ class NexusState(rx.State):
     async def save_campaign(self):
         if not self.form_name.strip():
             self.form_error = "Campaign name is required."
+            return
+        if not self.form_device_types:
+            self.form_error = "At least one platform must be selected."
             return
         cid = self.form_edit_campaign_id
         if not cid:
@@ -1254,8 +1577,10 @@ class NexusState(rx.State):
             "goal": self.form_goal.strip() or "100",
             "calendar_id": self.form_calendar_id.strip() or "primary",
             "calendar_filter": self.form_calendar_filter.strip(),
-            "device_type": self.form_device_type or "Multi-device",
+            "device_types": list(self.form_device_types),
             "device_quota": dict(self.form_device_quota),
+            "default_platform": self.form_default_platform,
+            "default_model_tag": self.form_default_model_tag,
         })
         self.clear_form()
         return rx.redirect(f"/campaign/{cid}")

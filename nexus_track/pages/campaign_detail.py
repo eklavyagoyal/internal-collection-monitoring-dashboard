@@ -178,21 +178,14 @@ def _campaign_header() -> rx.Component:
                 flex="1",
                 min_width="0",
             ),
-            # CENTER: campaign status badge
+            # CENTER: campaign status dropdown
             rx.vstack(
-                rx.cond(
-                    NexusState.campaign_status == "active",
-                    rx.badge("Active", color_scheme="green", size="2",
-                             variant="soft", cursor="pointer",
-                             on_click=NexusState.toggle_campaign_status),
-                    rx.cond(
-                        NexusState.campaign_status == "archived",
-                        rx.badge("Archived", color_scheme="gray", size="2",
-                                 variant="soft"),
-                        rx.badge("Paused", color_scheme="orange", size="2",
-                                 variant="soft", cursor="pointer",
-                                 on_click=NexusState.toggle_campaign_status),
-                    ),
+                rx.select(
+                    ["active", "paused", "completed"],
+                    value=NexusState.campaign_status,
+                    on_change=NexusState.set_campaign_status,
+                    size="1",
+                    variant="soft",
                 ),
                 # Meta pills: filter, created, last sync
                 rx.hstack(
@@ -264,29 +257,6 @@ def _campaign_header() -> rx.Component:
                 ),
                 # Action buttons
                 rx.hstack(
-                    rx.cond(
-                        NexusState.campaign_status == "archived",
-                        rx.icon_button(
-                            rx.icon("archive-restore", size=16),
-                            size="2",
-                            variant="soft",
-                            color_scheme="green",
-                            border_radius=RADIUS_MD,
-                            on_click=NexusState.unarchive_campaign,
-                            cursor="pointer",
-                            title="Unarchive",
-                        ),
-                        rx.icon_button(
-                            rx.icon("archive", size=16),
-                            size="2",
-                            variant="soft",
-                            color_scheme="gray",
-                            border_radius=RADIUS_MD,
-                            on_click=NexusState.archive_campaign,
-                            cursor="pointer",
-                            title="Archive",
-                        ),
-                    ),
                     rx.link(
                         rx.icon_button(
                             rx.icon("pencil", size=16),
@@ -381,6 +351,160 @@ def _campaign_header() -> rx.Component:
 # Stats + progress bar
 # -----------------------------------------------------------------------
 
+def _breakdown_bar(pct, near_full, width: str = "60px") -> rx.Component:
+    """Mini horizontal progress bar used in both platform and model rows."""
+    return rx.box(
+        rx.box(
+            width=pct.to(str) + "%",
+            height="100%",
+            border_radius="3px",
+            background=rx.cond(near_full, AMBER, ACCENT_GRADIENT),
+            max_width="100%",
+            transition="width 0.3s ease",
+        ),
+        width=width,
+        height="5px",
+        border_radius="3px",
+        background="rgba(255,255,255,0.06)",
+        flex_shrink="0",
+    )
+
+
+def _model_cell(m) -> rx.Component:
+    """Single model cell inside the 2-column grid."""
+    total = m.total.to(int)
+    completed = m.completed.to(int)
+    pct = m.pct.to(int)
+    return rx.hstack(
+        rx.text(
+            m.model,
+            size="1",
+            color=TEXT,
+            flex="1",
+            min_width="0",
+            overflow="hidden",
+            text_overflow="ellipsis",
+            white_space="nowrap",
+        ),
+        _breakdown_bar(pct, False, width="50px"),
+        rx.text(
+            completed.to(str) + "/" + total.to(str),
+            size="1",
+            color=SUBTEXT,
+            min_width="36px",
+            text_align="right",
+            font_variant_numeric="tabular-nums",
+        ),
+        spacing="2",
+        align="center",
+        width="100%",
+        padding="4px 8px",
+    )
+
+
+def _platform_section(d) -> rx.Component:
+    """Renders a platform header row + a 2-column grid of its models when expanded."""
+    platform = d.platform.to(str)
+    total = d.total.to(int)
+    completed = d.completed.to(int)
+    pct = d.pct.to(int)
+    near_full = d.near_full
+    is_expanded = d.is_expanded
+
+    return rx.vstack(
+        rx.hstack(
+            rx.icon(
+                rx.cond(is_expanded, "chevron-down", "chevron-right"),
+                size=13,
+                color=SUBTEXT,
+                flex_shrink="0",
+            ),
+            rx.text(platform, size="2", weight="bold", color=HEADING, flex="1", min_width="0"),
+            _breakdown_bar(pct, near_full, width="70px"),
+            rx.text(
+                completed.to(str) + "/" + total.to(str),
+                size="1",
+                weight="medium",
+                color=rx.cond(near_full, AMBER, SUBTEXT),
+                min_width="36px",
+                text_align="right",
+                font_variant_numeric="tabular-nums",
+            ),
+            spacing="2",
+            align="center",
+            width="100%",
+            cursor="pointer",
+            on_click=NexusState.toggle_platform_panel(platform),
+            padding="10px 14px",
+            _hover={"background": "rgba(255,255,255,0.03)"},
+        ),
+        rx.cond(
+            is_expanded,
+            rx.box(
+                rx.grid(
+                    rx.foreach(d.models, _model_cell),
+                    columns=rx.breakpoints(initial="1", sm="2"),
+                    spacing="1",
+                    width="100%",
+                ),
+                padding_left="22px",
+                padding_right="14px",
+                padding_bottom="8px",
+                width="100%",
+            ),
+            rx.fragment(),
+        ),
+        spacing="0",
+        width="100%",
+    )
+
+
+def _platform_breakdown_panel() -> rx.Component:
+    """Platform x model breakdown — collapsible dropdown, models in 2-col grid."""
+    return rx.cond(
+        NexusState.platform_breakdown_for_render.length() > 0,
+        rx.vstack(
+            # Dropdown header (click to open/close the whole section)
+            rx.hstack(
+                rx.icon(
+                    rx.cond(NexusState.device_breakdown_open, "chevron-down", "chevron-right"),
+                    size=14,
+                    color=ACCENT,
+                ),
+                rx.icon("monitor-smartphone", size=14, color=ACCENT),
+                rx.text("Device & Model Breakdown", size="2", weight="bold", color=HEADING),
+                spacing="2",
+                align="center",
+                cursor="pointer",
+                on_click=NexusState.toggle_device_breakdown,
+                width="100%",
+                _hover={"opacity": "0.8"},
+            ),
+            # Collapsible content
+            rx.cond(
+                NexusState.device_breakdown_open,
+                rx.vstack(
+                    rx.foreach(NexusState.platform_breakdown_for_render, _platform_section),
+                    spacing="0",
+                    width="100%",
+                    border_radius=RADIUS_MD,
+                    overflow="hidden",
+                    border=BORDER,
+                ),
+                rx.fragment(),
+            ),
+            spacing="2",
+            width="100%",
+            padding="12px 16px",
+            border_radius=RADIUS_MD,
+            background=CARD_BG,
+            border=BORDER,
+            margin_top="12px",
+        ),
+        rx.fragment(),
+    )
+
+
 def _stats_and_progress() -> rx.Component:
     return rx.vstack(
         # Stat pills — use same deduplicated counts as the progress bar
@@ -398,6 +522,23 @@ def _stats_and_progress() -> rx.Component:
             align="center",
             width="100%",
             flex_wrap="wrap",
+        ),
+        # Per-device progress panel
+        _platform_breakdown_panel(),
+        # Session analytics pills
+        rx.cond(
+            NexusState.avg_session_minutes > 0,
+            rx.hstack(
+                _stat_pill("Avg", NexusState.avg_session_minutes.to(str) + " min", BLUE, BLUE_SOFT),
+                rx.cond(
+                    NexusState.eta_finish_today != "",
+                    _stat_pill("ETA", NexusState.eta_finish_today, VIOLET, ACCENT_SOFT),
+                    rx.fragment(),
+                ),
+                spacing="3",
+                align="center",
+            ),
+            rx.fragment(),
         ),
         spacing="3",
         width="100%",
