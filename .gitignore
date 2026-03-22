@@ -11,7 +11,9 @@ node_modules/
 credentials.json
 token.json
 .env
+improvements.md
 *.egg-info/
 dist/
 build/
 .DS_Store
+docs/

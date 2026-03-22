@@ -21,10 +21,10 @@ Built with **Reflex** (Python → React + FastAPI), **MongoDB** (async via Motor
 |---|---|
 | **Google Calendar Sync** | Upserts by Event ID — manual edits are never overwritten on re-sync |
 | **Manual Add** | Add participants without a calendar event |
-| **Inline Status** | `Pending → In-Progress → Completed` with automatic `start_time` / `end_time` stamps |
+| **Inline Status** | Fixed `Booked ↔ Completed` workflow with completion timestamps |
 | **Platform & Model Tags** | Assign hardware platform + AI model version per participant |
 | **Inline Notes** | Freeform notes field on every row, saved on blur |
-| **Bulk Actions** | Select multiple rows → bulk set status / platform / model tag |
+| **Bulk Actions** | Select multiple rows → bulk mark `Booked` / `Completed` or delete selected rows |
 | **Sorting** | Click any column header to sort asc/desc (time, name, status) |
 | **Search** | Filter by name, email, platform, or model tag |
 | **CSV Export** | Download all participants for a campaign / date |
@@ -43,7 +43,7 @@ Built with **Reflex** (Python → React + FastAPI), **MongoDB** (async via Motor
 | **Real-Time Multi-User** | 10-second auto-refresh via MongoDB, pushed to all clients over WebSocket |
 | **Date Navigation** | Step forward/back by day to review historical data |
 | **Dark / Light Mode** | Toggle with a single click |
-| **Configurable Labels** | Add/remove platforms, model tags, and statuses from Settings — no redeploy needed |
+| **Configurable Labels** | Add/remove platforms and model tags from Settings — no redeploy needed |
 
 ---
 
@@ -192,9 +192,15 @@ A background loop polls MongoDB every **10 seconds** and pushes fresh state to a
 All colours, shadows, radii, and component helpers live in `components/design_tokens.py` — `glass_card()`, `section_header()`, `form_field()`, `progress_bar()`, `status_dot()` — used consistently across every page.
 
 ### Status Timestamps
-- Transitioning to **In-Progress** captures `start_time`
-- Transitioning to **Completed** captures `end_time`
-- Resetting to **Pending** clears both timestamps
+- The live workflow uses two fixed statuses: **Booked** and **Completed**
+- Marking a participant as **Completed** captures `end_time`
+- Returning a participant to **Booked** clears completion timestamps
+
+### Campaign Progress
+- Overall campaign progress is based on **unique participants** across the full campaign
+- Participants are deduplicated by normalised email when available
+- Rows without an email fall back to their event ID, so blank-email bookings are never merged accidentally
+- Daily tables still show appointment rows for the currently loaded date range/view
 
 ---
 

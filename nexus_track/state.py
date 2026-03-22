@@ -22,6 +22,7 @@ from .backend.mongo_client import (
     count_all_campaigns,
     bulk_delete_participants as db_bulk_delete,
     bulk_update_participant_field as db_bulk_update,
+    bulk_update_participant_status as db_bulk_update_status,
     clone_campaign as db_clone_campaign,
     create_campaign as db_create_campaign,
     delete_campaign as db_delete_campaign,
@@ -107,11 +108,9 @@ class NexusState(rx.State):
 
     # SETTINGS / LABELS
     platforms: list[str] = ["Orb", "Kiosk-v1", "Kiosk-v2", "Self-Serve", "Other"]
-    statuses: list[str] = ["Booked", "Completed"]
 
     new_platform: str = ""
     new_model_tag: str = ""
-    new_status_label: str = ""
     model_tag_add_platform: str = ""
     model_tag_inputs: dict = {}
 
@@ -667,7 +666,6 @@ class NexusState(rx.State):
     async def load_settings(self):
         doc = await get_settings()
         self.platforms = doc.get("platforms", self.platforms)
-        self.statuses = doc.get("statuses", self.statuses)
         self.has_admin_pin = bool(doc.get("admin_pin_hash", ""))
         self.platform_model_tags = doc.get("platform_model_tags", {})
 
@@ -740,24 +738,6 @@ class NexusState(rx.State):
         pmt[platform] = existing
         self.platform_model_tags = pmt
         await db_update_platform_model_tags(_to_plain_python(pmt))
-
-    def set_new_status_label(self, v: str):
-        self.new_status_label = v
-
-    async def handle_status_key_down(self, key: str):
-        if key == "Enter":
-            await self.add_status_label()
-
-    async def add_status_label(self):
-        v = self.new_status_label.strip()
-        if v and v not in self.statuses:
-            self.statuses = list(self.statuses) + [v]
-            await update_label_list("statuses", list(self.statuses))
-        self.new_status_label = ""
-
-    async def remove_status_label(self, label: str):
-        self.statuses = [s for s in self.statuses if s != label]
-        await update_label_list("statuses", list(self.statuses))
 
     @rx.event(background=True)
     async def fetch_available_calendars(self):
@@ -996,7 +976,7 @@ class NexusState(rx.State):
     async def bulk_set_status(self, new_status: str):
         cid = self.active_campaign_id
         if cid and self.selected_ids:
-            await db_bulk_update(cid, list(self.selected_ids), "status", new_status)
+            await db_bulk_update_status(cid, list(self.selected_ids), new_status)
             self.selected_ids = []
             await self._reload_participants()
 

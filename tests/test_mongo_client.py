@@ -71,12 +71,12 @@ class TestCreateCampaign:
         assert doc["goal"] == 100
 
     @pytest.mark.asyncio
-    async def test_no_notion_or_linear_fields(self):
-        """Notion/Linear fields were removed — they should not appear."""
+    async def test_external_link_fields_default_to_empty_strings(self):
+        """Campaigns keep external-link fields even when they are unset."""
         cid = await mc.create_campaign({"name": "NL"})
         doc = await mc.get_campaign(cid)
-        assert "notion_url" not in doc
-        assert "linear_url" not in doc
+        assert doc["notion_url"] == ""
+        assert doc["linear_url"] == ""
 
 
 class TestUpdateCampaign:
@@ -191,15 +191,45 @@ class TestParticipantCRUD:
         await mc.upsert_participant(
             cid, "evt-5", "Frank", "f@t.com", "14:00", "2024-06-15",
         )
-        await mc.update_participant_status(cid, "evt-5", "In-Progress")
-        p = (await mc.get_participants_for_campaign(cid, "2024-06-15"))[0]
-        assert p["status"] == "In-Progress"
-        assert p["start_time"] is not None
-
         await mc.update_participant_status(cid, "evt-5", "Completed")
         p = (await mc.get_participants_for_campaign(cid, "2024-06-15"))[0]
         assert p["status"] == "Completed"
         assert p["end_time"] is not None
+
+        await mc.update_participant_status(cid, "evt-5", "Booked")
+        p = (await mc.get_participants_for_campaign(cid, "2024-06-15"))[0]
+        assert p["status"] == "Booked"
+        assert p["start_time"] is None
+        assert p["end_time"] is None
+
+    @pytest.mark.asyncio
+    async def test_invalid_status_rejected(self):
+        cid = await mc.create_campaign({"name": "P6"})
+        await mc.upsert_participant(
+            cid, "evt-6", "Nina", "n@t.com", "15:00", "2024-06-15",
+        )
+
+        with pytest.raises(ValueError):
+            await mc.update_participant_status(cid, "evt-6", "In-Progress")
+
+    @pytest.mark.asyncio
+    async def test_bulk_status_transitions_follow_same_contract(self):
+        cid = await mc.create_campaign({"name": "P7"})
+        await mc.upsert_participant(
+            cid, "evt-7a", "Amy", "amy@test.com", "10:00", "2024-06-15",
+        )
+        await mc.upsert_participant(
+            cid, "evt-7b", "Ben", "ben@test.com", "11:00", "2024-06-15",
+        )
+
+        modified = await mc.bulk_update_participant_status(
+            cid, ["evt-7a", "evt-7b"], "Completed",
+        )
+        assert modified == 2
+
+        parts = await mc.get_participants_for_campaign(cid, "2024-06-15")
+        assert all(p["status"] == "Completed" for p in parts)
+        assert all(p["end_time"] is not None for p in parts)
 
 
 class TestManualParticipant:
@@ -229,7 +259,7 @@ class TestCampaignProgress:
     @pytest.mark.asyncio
     async def test_booked_and_completed(self):
         cid = await mc.create_campaign({"name": "Prog2"})
-        # 3 participants over 2 dates
+        # 3 unique participants over 2 dates
         await mc.upsert_participant(cid, "e1", "A", "a@t.com", "10:00", "2024-06-15")
         await mc.upsert_participant(cid, "e2", "B", "b@t.com", "11:00", "2024-06-15")
         await mc.upsert_participant(cid, "e3", "C", "c@t.com", "09:00", "2024-06-16")
@@ -243,13 +273,32 @@ class TestCampaignProgress:
 
     @pytest.mark.asyncio
     async def test_deduplication_by_email(self):
-        """Same email across two dates should count as 1 unique participant."""
+        """Same email across two dates counts as 1 unique campaign participant."""
         cid = await mc.create_campaign({"name": "Prog3"})
         await mc.upsert_participant(cid, "e-d1", "X", "x@t.com", "10:00", "2024-06-15")
         await mc.upsert_participant(cid, "e-d2", "X", "x@t.com", "10:00", "2024-06-16")
 
         result = await mc.get_campaign_progress(cid)
         assert result["booked"] == 1  # deduplicated by email
+
+    @pytest.mark.asyncio
+    async def test_completed_is_deduplicated_by_email(self):
+        cid = await mc.create_campaign({"name": "Prog4"})
+        await mc.upsert_participant(cid, "e4-1", "Y", "y@t.com", "10:00", "2024-06-15")
+        await mc.upsert_participant(cid, "e4-2", "Y", "y@t.com", "10:00", "2024-06-16")
+        await mc.update_participant_status(cid, "e4-2", "Completed")
+
+        result = await mc.get_campaign_progress(cid)
+        assert result == {"booked": 1, "completed": 1}
+
+    @pytest.mark.asyncio
+    async def test_blank_email_rows_do_not_deduplicate(self):
+        cid = await mc.create_campaign({"name": "Prog5"})
+        await mc.upsert_participant(cid, "e5-1", "Z", "", "10:00", "2024-06-15")
+        await mc.upsert_participant(cid, "e5-2", "Z", "", "10:00", "2024-06-16")
+
+        result = await mc.get_campaign_progress(cid)
+        assert result == {"booked": 2, "completed": 0}
 
 
 class TestExportCSV:

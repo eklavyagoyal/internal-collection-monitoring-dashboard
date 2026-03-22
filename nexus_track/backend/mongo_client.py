@@ -4,7 +4,7 @@ Async MongoDB client for Nexus-Track.
 Collections:
   • **campaigns**    – collection campaigns with metadata + calendar config
   • **participants** – participant records scoped to a campaign + date
-  • **settings**     – user-configurable labels (platforms, model_tags, statuses)
+  • **settings**     – user-configurable platform/model labels + admin config
 """
 
 import os
@@ -23,8 +23,8 @@ _client: AsyncIOMotorClient | None = None
 # Default label sets shipped with a fresh install.
 DEFAULT_PLATFORMS = ["Orb", "Kiosk-v1", "Kiosk-v2", "Self-Serve", "Other"]
 DEFAULT_MODEL_TAGS = ["v4.5", "v4.6", "v5.0", "beta"]
-DEFAULT_STATUSES = ["Booked", "Completed"]
 DEFAULT_DEVICE_TYPES = ["iOS", "Android", "Orb"]
+FIXED_PARTICIPANT_STATUSES = ("Booked", "Completed")
 
 
 def _get_client() -> AsyncIOMotorClient:
@@ -104,7 +104,6 @@ async def get_settings() -> dict:
         "_key": "labels",
         "platforms": DEFAULT_PLATFORMS,
         "model_tags": DEFAULT_MODEL_TAGS,
-        "statuses": DEFAULT_STATUSES,
         "admin_pin_hash": "",
         "platform_model_tags": {},
     }
@@ -114,8 +113,8 @@ async def get_settings() -> dict:
 
 
 async def update_label_list(label_type: str, values: list[str]) -> None:
-    """Update one of the label lists: platforms, model_tags, or statuses."""
-    if label_type not in ("platforms", "model_tags", "statuses"):
+    """Update one of the supported label lists: platforms or model_tags."""
+    if label_type not in ("platforms", "model_tags"):
         raise ValueError(f"Unknown label type: {label_type}")
     await _settings().update_one(
         {"_key": "labels"},
@@ -313,32 +312,34 @@ async def unarchive_campaign(campaign_id: str) -> None:
 # =========================================================================
 
 async def get_campaign_progress(campaign_id: str) -> dict:
-    """Return aggregated progress stats across ALL dates for a campaign.
+    """Return unique-participant progress stats across ALL dates for a campaign.
 
-    Returns {booked, completed} where:
-      - booked   = total participant entries (matches the bookings table)
-      - completed = entries whose status is 'Completed'
+    Campaign goals track unique participants, not raw appointment rows.
+    Participants are deduplicated by normalized email when available; rows
+    without an email fall back to their event ID so we never merge unrelated
+    bookings just because the email is blank.
     """
-    pipeline = [
-        {"$match": {"campaign_id": campaign_id}},
-        {"$group": {
-            "_id": None,
-            "booked": {"$sum": 1},
-            "completed": {
-                "$sum": {
-                    "$cond": [
-                        {"$eq": ["$status", "Completed"]},
-                        1, 0,
-                    ]
-                }
-            },
-        }},
-    ]
-    cursor = _participants().aggregate(pipeline)
-    result = await cursor.to_list(length=1)
-    if result:
-        return {"booked": result[0]["booked"], "completed": result[0]["completed"]}
-    return {"booked": 0, "completed": 0}
+    cursor = _participants().find(
+        {"campaign_id": campaign_id},
+        {"email": 1, "status": 1, "google_event_id": 1},
+    )
+
+    seen: dict[str, bool] = {}
+    async for doc in cursor:
+        email = str(doc.get("email", "")).strip().lower()
+        if email:
+            progress_key = f"email:{email}"
+        else:
+            progress_key = f"event:{doc.get('google_event_id', '')}"
+
+        seen.setdefault(progress_key, False)
+        if doc.get("status") == "Completed":
+            seen[progress_key] = True
+
+    return {
+        "booked": len(seen),
+        "completed": sum(1 for completed in seen.values() if completed),
+    }
 
 
 async def get_all_campaigns_with_stats(
@@ -444,11 +445,17 @@ async def update_participant_field(
 async def update_participant_status(
     campaign_id: str, event_id: str, new_status: str,
 ) -> None:
+    if new_status not in FIXED_PARTICIPANT_STATUSES:
+        raise ValueError(
+            f"Unsupported participant status: {new_status!r}. "
+            f"Expected one of {FIXED_PARTICIPANT_STATUSES}."
+        )
     now = datetime.now(timezone.utc).isoformat()
     update: dict[str, Any] = {"status": new_status, "updated_at": now}
     if new_status == "Completed":
         update["end_time"] = now
     elif new_status == "Booked":
+        update["start_time"] = None
         update["end_time"] = None
     await _participants().update_one(
         {"campaign_id": campaign_id, "google_event_id": event_id},
@@ -527,6 +534,33 @@ async def bulk_update_participant_field(
     result = await _participants().update_many(
         {"campaign_id": campaign_id, "google_event_id": {"$in": event_ids}},
         {"$set": {field: value, "updated_at": now}},
+    )
+    return result.modified_count
+
+
+async def bulk_update_participant_status(
+    campaign_id: str,
+    event_ids: list[str],
+    new_status: str,
+) -> int:
+    """Update participant statuses in bulk using the fixed two-status workflow."""
+    if new_status not in FIXED_PARTICIPANT_STATUSES:
+        raise ValueError(
+            f"Unsupported participant status: {new_status!r}. "
+            f"Expected one of {FIXED_PARTICIPANT_STATUSES}."
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    update: dict[str, Any] = {"status": new_status, "updated_at": now}
+    if new_status == "Completed":
+        update["end_time"] = now
+    else:
+        update["start_time"] = None
+        update["end_time"] = None
+
+    result = await _participants().update_many(
+        {"campaign_id": campaign_id, "google_event_id": {"$in": event_ids}},
+        {"$set": update},
     )
     return result.modified_count
 

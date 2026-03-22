@@ -126,6 +126,35 @@ def _label_section(
 
 
 # ---------------------------------------------------------------------------
+# Fixed participant-status contract
+# ---------------------------------------------------------------------------
+
+def _participant_status_contract() -> rx.Component:
+    return glass_card(
+        section_header(
+            "check",
+            "Participant Status",
+            "Nexus-Track uses one fixed workflow everywhere in the dashboard.",
+        ),
+        rx.hstack(
+            rx.badge("Booked", color_scheme="amber", size="2", variant="soft"),
+            rx.icon("arrow-right", size=14, color=SUBTEXT),
+            rx.badge("Completed", color_scheme="green", size="2", variant="soft"),
+            spacing="2",
+            align="center",
+            margin_bottom="12px",
+        ),
+        rx.text(
+            "Status is intentionally fixed to Booked and Completed so "
+            "filters, exports, progress, and bulk actions all stay consistent.",
+            size="2",
+            color=TEXT,
+            line_height="1.6",
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Calendar discovery section
 # ---------------------------------------------------------------------------
 
@@ -396,17 +425,7 @@ def settings_page() -> rx.Component:
                 remove_fn=NexusState.remove_platform,
                 key_down_fn=NexusState.handle_platform_key_down,
             ),
-            _label_section(
-                title="Statuses",
-                description="Participant status labels",
-                icon_name="check",
-                labels=NexusState.statuses,
-                new_value=NexusState.new_status_label,
-                set_new=NexusState.set_new_status_label,
-                add_fn=NexusState.add_status_label,
-                remove_fn=NexusState.remove_status_label,
-                key_down_fn=NexusState.handle_status_key_down,
-            ),
+            _participant_status_contract(),
             columns=rx.breakpoints(initial="1", md="2"),
             spacing="4",
             width="100%",
