@@ -12,7 +12,7 @@ import csv
 import io
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import reflex as rx
 from pydantic import BaseModel
@@ -24,6 +24,7 @@ from .backend.mongo_client import (
     bulk_delete_participants as db_bulk_delete,
     bulk_update_participant_field as db_bulk_update,
     bulk_update_participant_status as db_bulk_update_status,
+    build_participant_model_fields,
     clone_campaign as db_clone_campaign,
     create_campaign as db_create_campaign,
     delete_campaign as db_delete_campaign,
@@ -38,12 +39,15 @@ from .backend.mongo_client import (
     get_participants_for_campaign,
     get_participants_for_export,
     get_settings,
+    operational_now,
+    operational_today_str,
     hash_admin_pin as db_hash_admin_pin,
     record_audit_event as db_record_audit_event,
     set_admin_pin as db_set_admin_pin,
     update_campaign as db_update_campaign,
     update_campaign_field as db_update_campaign_field,
     update_campaign_sync_state as db_update_campaign_sync_state,
+    update_participant_identity_and_schedule as db_update_participant_identity_and_schedule,
     update_label_list,
     update_participant_field as db_update_field,
     update_participant_status as db_update_status,
@@ -74,6 +78,14 @@ def _parse_timestamp(value: str | None) -> datetime | None:
         return _normalize_local_datetime(datetime.fromisoformat(raw))
     except Exception:
         return None
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_now_iso() -> str:
+    return _utc_now().isoformat()
 
 
 def _relative_time_label(
@@ -363,7 +375,7 @@ def _absolute_date_label(date_str: str) -> str:
 
 
 def _display_date_label(date_str: str) -> str:
-    today = datetime.now().date()
+    today = datetime.strptime(operational_today_str(), "%Y-%m-%d").date()
     base_date = date_str or today.strftime("%Y-%m-%d")
     label = _absolute_date_label(base_date)
     try:
@@ -390,7 +402,7 @@ def _compact_date_label(date_str: str) -> str:
 
 
 def _dashboard_day_metric_label(selected_date: str) -> str:
-    if selected_date == datetime.now().strftime("%Y-%m-%d"):
+    if selected_date == operational_today_str():
         return "Today"
     return "Day"
 
@@ -1109,7 +1121,7 @@ class NexusState(rx.State):
     show_bulk_delete_dialog: bool = False
 
     def _get_date(self) -> str:
-        return self.selected_date or datetime.now().strftime("%Y-%m-%d")
+        return self.selected_date or operational_today_str()
 
     # COMPUTED VARS
 
@@ -1169,7 +1181,7 @@ class NexusState(rx.State):
         remaining = self.booked_count
         if remaining <= 0:
             return ""
-        eta = datetime.now() + timedelta(minutes=remaining * avg)
+        eta = operational_now() + timedelta(minutes=remaining * avg)
         return "~" + eta.strftime("%H:%M")
 
     @rx.var(cache=True)
@@ -1218,7 +1230,28 @@ class NexusState(rx.State):
         field = self.sort_field or "appointment_time"
         reverse = self.sort_dir == "desc"
         try:
-            items = sorted(items, key=lambda p: (p.get(field) or "").lower(), reverse=reverse)
+            if field == "appointment_time":
+                items = sorted(
+                    items,
+                    key=lambda p: (
+                        str(
+                            p.get("appointment_sort_key")
+                            or (
+                                str(p.get("appointment_date", "") or "")
+                                + "T"
+                                + str(p.get("appointment_time", "") or "")
+                            )
+                        ).lower(),
+                        str(p.get("google_event_id", "") or "").lower(),
+                    ),
+                    reverse=reverse,
+                )
+            else:
+                items = sorted(
+                    items,
+                    key=lambda p: (p.get(field) or "").lower(),
+                    reverse=reverse,
+                )
         except Exception:
             pass
         return items
@@ -1717,11 +1750,11 @@ class NexusState(rx.State):
         d = self.selected_date
         if not d:
             return True
-        return d == datetime.now().strftime("%Y-%m-%d")
+        return d == operational_today_str()
 
     @rx.var(cache=True)
     def selected_date_iso(self) -> str:
-        return self.selected_date or datetime.now().strftime("%Y-%m-%d")
+        return self.selected_date or operational_today_str()
 
     @rx.var(cache=True)
     def app_refresh_health(self) -> dict[str, str]:
@@ -2110,13 +2143,13 @@ class NexusState(rx.State):
         self.sync_error_detail = ""
 
     def _mark_data_refresh_success(self, timestamp: str | None = None) -> None:
-        self.last_data_refresh_at = timestamp or datetime.now().isoformat()
+        self.last_data_refresh_at = timestamp or _utc_now_iso()
         self.last_data_refresh_error = ""
         self.last_data_refresh_error_at = ""
 
     def _mark_data_refresh_error(self, message: str) -> None:
         self.last_data_refresh_error = str(message or "").strip() or "Live refresh failed."
-        self.last_data_refresh_error_at = datetime.now().isoformat()
+        self.last_data_refresh_error_at = _utc_now_iso()
 
     def _set_current_campaign_sync_state(
         self,
@@ -2359,7 +2392,9 @@ class NexusState(rx.State):
         if self.admin_lockout_until:
             try:
                 lockout_until = datetime.fromisoformat(self.admin_lockout_until)
-                if lockout_until > datetime.now():
+                if lockout_until.tzinfo is None:
+                    lockout_until = lockout_until.replace(tzinfo=timezone.utc)
+                if lockout_until > _utc_now():
                     self.admin_error = (
                         "Too many incorrect PIN attempts. "
                         f"Try again after {lockout_until.strftime('%H:%M:%S')}."
@@ -2395,7 +2430,7 @@ class NexusState(rx.State):
             self.admin_login_attempts += 1
             if self.admin_login_attempts >= 5:
                 self.admin_lockout_until = (
-                    datetime.now() + timedelta(minutes=1)
+                    _utc_now() + timedelta(minutes=1)
                 ).isoformat()
                 self.admin_login_attempts = 0
                 self.admin_error = (
@@ -2633,7 +2668,7 @@ class NexusState(rx.State):
             self.filter_date = ""
             self.filter_has_issue = False
             if not self.selected_date:
-                self.selected_date = datetime.now().strftime("%Y-%m-%d")
+                self.selected_date = operational_today_str()
             self.sync_start_date = self.selected_date_iso
             self.sync_end_date = self.selected_date_iso
             if cid:
@@ -2696,7 +2731,7 @@ class NexusState(rx.State):
                         **participant,
                         "status": new_status,
                         "end_time": (
-                            datetime.now().isoformat()
+                            _utc_now_iso()
                             if new_status == "Completed"
                             else None
                         ),
@@ -2804,7 +2839,7 @@ class NexusState(rx.State):
 
     @rx.event(background=True)
     async def sync_campaign_calendar(self):
-        attempted_at = datetime.now().isoformat()
+        attempted_at = _utc_now_iso()
         async with self:
             self.is_syncing = True
             self._clear_sync_feedback()
@@ -2822,7 +2857,7 @@ class NexusState(rx.State):
             async with self:
                 self._set_current_campaign_sync_state(attempt_at=attempted_at)
             count = await sync_calendar_for_campaign(campaign, date)
-            success_at = datetime.now().isoformat()
+            success_at = _utc_now_iso()
             if cid:
                 await db_update_campaign_sync_state(
                     cid,
@@ -2885,7 +2920,7 @@ class NexusState(rx.State):
     @rx.event(background=True)
     async def sync_campaign_range(self):
         """Sync events for a date range instead of a single day."""
-        attempted_at = datetime.now().isoformat()
+        attempted_at = _utc_now_iso()
         async with self:
             self.is_syncing = True
             self._clear_sync_feedback()
@@ -2915,7 +2950,7 @@ class NexusState(rx.State):
             async with self:
                 self._set_current_campaign_sync_state(attempt_at=attempted_at)
             result = await sync_campaign_date_range(campaign, start, end)
-            success_at = datetime.now().isoformat()
+            success_at = _utc_now_iso()
             if cid:
                 await db_update_campaign_sync_state(
                     cid,
@@ -2980,7 +3015,7 @@ class NexusState(rx.State):
             await asyncio.sleep(10)
             try:
                 async with self:
-                    date = self.selected_date or datetime.now().strftime("%Y-%m-%d")
+                    date = self.selected_date or operational_today_str()
                     cid = self.active_campaign_id
                     show_arch = self.show_archived
                 fresh_campaigns = await get_all_campaigns_with_stats(
@@ -3041,7 +3076,7 @@ class NexusState(rx.State):
                         **participant,
                         "status": new_status,
                         "end_time": (
-                            datetime.now().isoformat()
+                            _utc_now_iso()
                             if new_status == "Completed"
                             else None
                         ),
@@ -3119,10 +3154,14 @@ class NexusState(rx.State):
         appointment_date: str,
         appointment_time: str,
     ) -> None:
-        await db_update_field(cid, eid, "name", name)
-        await db_update_field(cid, eid, "email", email)
-        await db_update_field(cid, eid, "appointment_date", appointment_date)
-        await db_update_field(cid, eid, "appointment_time", appointment_time)
+        await db_update_participant_identity_and_schedule(
+            cid,
+            eid,
+            name=name,
+            email=email,
+            appointment_date=appointment_date,
+            appointment_time=appointment_time,
+        )
 
     async def save_edit_participant(self):
         cid = self.active_campaign_id
@@ -3141,8 +3180,12 @@ class NexusState(rx.State):
                     **participant,
                     "name": new_name,
                     "email": new_email,
-                    "appointment_date": new_date,
-                    "appointment_time": new_time,
+                    **build_participant_model_fields(
+                        event_id=eid,
+                        email=new_email,
+                        appointment_date=new_date,
+                        appointment_time=new_time,
+                    ),
                 },
             ),
             persist=lambda: self._persist_edit_participant(

@@ -43,7 +43,7 @@ Built with **Reflex** (Python → React + FastAPI), **MongoDB** (async via Motor
 |---|---|
 | **Real-Time Multi-User** | 10-second auto-refresh via MongoDB, pushed to all clients over WebSocket |
 | **Freshness Signals** | Navbar + campaign cards distinguish live refresh, stale syncs, failed attempts, and never-synced campaigns |
-| **Date Navigation** | Visible `Previous / Today / Next` day context on dashboard and campaign detail pages |
+| **Date Navigation** | Visible `Previous / Today / Next` day context on dashboard and campaign detail pages, anchored to a configurable operations-day timezone |
 | **Dark / Light Mode** | Toggle with a single click |
 | **Configurable Labels** | Add/remove platforms and model tags from Settings with usage-aware safety checks — no redeploy needed |
 | **Admin Safety Rails** | Admin PIN gates campaign/settings mutations and protected actions write lightweight audit events |
@@ -144,6 +144,7 @@ reflex run
 | `MONGO_DB_NAME` | `nexus_track` | Database name |
 | `REDIS_URL` | `redis://redis:6379` | Redis for Reflex multi-tab state |
 | `API_URL` | `http://localhost:8000` | Backend API / WebSocket URL |
+| `APP_DAY_TIMEZONE` | `UTC` | Operational day timezone for dashboard defaults and daily counts; falls back to `TZ` if set |
 
 ---
 
@@ -188,6 +189,14 @@ reflex run
 ### Calendar Sync
 Each **Sync** call runs as a `@rx.event(background=True)` handler, offloading the Google API call via `asyncio.to_thread` to avoid blocking the event loop. Events are upserted with `$set` (calendar fields) + `$setOnInsert` (manual fields), keyed on `google_event_id` — so editing notes or status is always safe across re-syncs.
 
+Timed bookings now keep richer schedule truth than a plain date/time string alone:
+- the business-facing local appointment date and time
+- the raw provider start value
+- the UTC start timestamp
+- the source calendar timezone
+
+Historical participant rows are backfilled on read so old data stays understandable without a destructive migration.
+
 Every campaign now tracks:
 - the **last attempted sync**
 - the **last successful sync**
@@ -225,6 +234,7 @@ All colours, shadows, radii, and component helpers live in `components/design_to
 
 ### Participant Operations
 - The participant table now has an explicit scope: **Selected day only** or **All dates**
+- When no date is chosen, dashboard daily counts and campaign-detail defaults use `APP_DAY_TIMEZONE` (or `TZ`, then `UTC`) so "today" does not drift with the host machine's timezone
 - One-day sync and **Selected day** export always use the visible selected date
 - Bulk selection follows the current visible filtered view, so hidden rows are never changed by accident
 - Row-level platform, model, status, notes, and issue updates save optimistically and show lightweight save feedback
@@ -246,6 +256,7 @@ All colours, shadows, radii, and component helpers live in `components/design_to
 | Permission denied / 403 during sync | Re-authorize Google Calendar access and confirm the account can read the configured calendar |
 | MongoDB connection timeout | Verify Mongo container is healthy and `MONGO_URI` is correct in `.env` |
 | Empty participant list | Click **Sync Calendar** on the campaign detail page |
+| "Today" looks off by one day | Set `APP_DAY_TIMEZONE` (or `TZ`) to your team’s operating timezone, then restart the app |
 | Changes not visible on another device | Confirm Redis is running and `REDIS_URL` is set |
 | Port already in use | Change `3100:3000` / `8100:8000` in `docker-compose.yml` |
 

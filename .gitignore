@@ -12,6 +12,7 @@ credentials.json
 token.json
 .env
 improvements.md
+ideas.md
 *.egg-info/
 dist/
 build/

@@ -13,6 +13,7 @@ import os
 import secrets
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -28,6 +29,171 @@ DEFAULT_MODEL_TAGS = ["v4.5", "v4.6", "v5.0", "beta"]
 FIXED_PARTICIPANT_STATUSES = ("Booked", "Completed")
 PIN_HASH_ALGO = "pbkdf2_sha256"
 PIN_HASH_ITERATIONS = 390_000
+DEFAULT_OPERATIONS_TIMEZONE = "UTC"
+
+
+def utc_now_iso() -> str:
+    """Return the current UTC timestamp as an ISO-8601 string."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def resolve_operations_timezone_name(timezone_name: str | None = None) -> str:
+    """Return the configured operations-day timezone used for dashboard defaults."""
+    raw = str(
+        timezone_name
+        or os.getenv("APP_DAY_TIMEZONE")
+        or os.getenv("TZ")
+        or DEFAULT_OPERATIONS_TIMEZONE
+        or "",
+    ).strip()
+    if not raw:
+        return DEFAULT_OPERATIONS_TIMEZONE
+    try:
+        ZoneInfo(raw)
+        return raw
+    except ZoneInfoNotFoundError:
+        return DEFAULT_OPERATIONS_TIMEZONE
+
+
+def operational_now() -> datetime:
+    """Return the current datetime in the configured operations timezone."""
+    return datetime.now(ZoneInfo(resolve_operations_timezone_name()))
+
+
+def operational_today_str() -> str:
+    """Return today's ISO date in the configured operations timezone."""
+    return operational_now().strftime("%Y-%m-%d")
+
+
+def build_progress_key(email: str, event_id: str) -> str:
+    """Return the canonical participant identity used for campaign progress."""
+    normalized_email = str(email or "").strip().lower()
+    if normalized_email:
+        return f"email:{normalized_email}"
+    return f"event:{str(event_id or '').strip()}"
+
+
+def _normalize_appointment_time(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    for fmt in ("%H:%M", "%H:%M:%S"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%H:%M")
+        except ValueError:
+            continue
+    return raw
+
+
+def _normalize_appointment_date(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return raw
+
+
+def _build_appointment_sort_key(
+    appointment_date: str,
+    appointment_time: str,
+) -> str:
+    cleaned_date = _normalize_appointment_date(appointment_date)
+    cleaned_time = _normalize_appointment_time(appointment_time) or "00:00"
+    if cleaned_date:
+        return f"{cleaned_date}T{cleaned_time}:00"
+    return ""
+
+
+def build_appointment_fields(
+    *,
+    appointment_date: str,
+    appointment_time: str = "",
+    appointment_start_raw: str = "",
+    appointment_start_utc: str = "",
+    appointment_timezone: str = "",
+    appointment_has_time: bool | None = None,
+) -> dict[str, Any]:
+    """Build the normalized appointment fields stored on participant docs."""
+    cleaned_date = _normalize_appointment_date(appointment_date)
+    cleaned_time = _normalize_appointment_time(appointment_time)
+    has_time = bool(cleaned_time) if appointment_has_time is None else bool(appointment_has_time)
+    raw_start = str(appointment_start_raw or "").strip()
+    if not raw_start:
+        if cleaned_date and cleaned_time:
+            raw_start = f"{cleaned_date}T{cleaned_time}:00"
+        elif cleaned_date:
+            raw_start = cleaned_date
+
+    return {
+        "appointment_date": cleaned_date,
+        "appointment_time": cleaned_time,
+        "appointment_start_raw": raw_start,
+        "appointment_start_utc": str(appointment_start_utc or "").strip(),
+        "appointment_timezone": str(appointment_timezone or "").strip(),
+        "appointment_has_time": has_time,
+        "appointment_sort_key": _build_appointment_sort_key(cleaned_date, cleaned_time),
+    }
+
+
+def build_participant_model_fields(
+    *,
+    event_id: str,
+    email: str,
+    appointment_date: str,
+    appointment_time: str = "",
+    appointment_start_raw: str = "",
+    appointment_start_utc: str = "",
+    appointment_timezone: str = "",
+    appointment_has_time: bool | None = None,
+) -> dict[str, Any]:
+    """Build the normalized model-layer fields for a participant record."""
+    return {
+        **build_appointment_fields(
+            appointment_date=appointment_date,
+            appointment_time=appointment_time,
+            appointment_start_raw=appointment_start_raw,
+            appointment_start_utc=appointment_start_utc,
+            appointment_timezone=appointment_timezone,
+            appointment_has_time=appointment_has_time,
+        ),
+        "progress_key": build_progress_key(email, event_id),
+    }
+
+
+def _participant_sort_key(doc: dict) -> tuple[str, str]:
+    return (
+        str(doc.get("appointment_sort_key", "") or ""),
+        str(doc.get("google_event_id", "") or ""),
+    )
+
+
+def _backfill_participant_doc(doc: dict) -> dict:
+    """Ensure legacy participants expose the richer appointment model."""
+    doc.setdefault("notes", "")
+    doc.setdefault("issue_comment", "")
+    derived = build_participant_model_fields(
+        event_id=doc.get("google_event_id", ""),
+        email=doc.get("email", ""),
+        appointment_date=doc.get("appointment_date", ""),
+        appointment_time=doc.get("appointment_time", ""),
+        appointment_start_raw=doc.get("appointment_start_raw", ""),
+        appointment_start_utc=doc.get("appointment_start_utc", ""),
+        appointment_timezone=doc.get("appointment_timezone", ""),
+        appointment_has_time=doc.get("appointment_has_time"),
+    )
+    doc["progress_key"] = derived["progress_key"]
+    doc["appointment_sort_key"] = derived["appointment_sort_key"]
+    doc["appointment_has_time"] = derived["appointment_has_time"]
+    for key in (
+        "appointment_start_raw",
+        "appointment_start_utc",
+        "appointment_timezone",
+    ):
+        if not str(doc.get(key, "") or "").strip():
+            doc[key] = derived[key]
+    return doc
 
 
 def _get_client() -> AsyncIOMotorClient:
@@ -77,6 +243,12 @@ async def ensure_indexes() -> None:
     )
     await _participants().create_index(
         [("campaign_id", 1), ("appointment_date", 1)],
+    )
+    await _participants().create_index(
+        [("campaign_id", 1), ("appointment_sort_key", 1)],
+    )
+    await _participants().create_index(
+        [("campaign_id", 1), ("progress_key", 1)],
     )
     await _participants().create_index(
         [("campaign_id", 1), ("status", 1)],
@@ -207,7 +379,7 @@ async def record_audit_event(
     metadata: dict | None = None,
 ) -> None:
     """Persist a lightweight admin audit event."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     await _audit_log().insert_one({
         "created_at": now,
         "actor_role": "admin",
@@ -274,7 +446,7 @@ async def get_platform_model_tag_usage(
 async def create_campaign(data: dict) -> str:
     """Create a campaign and return its short ID."""
     cid = secrets.token_hex(4)
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
 
     # Validate and coerce goal to a positive integer (default 100).
     raw_goal = data.get("goal", 100)
@@ -327,7 +499,7 @@ async def create_campaign(data: dict) -> str:
 
 async def update_campaign(campaign_id: str, data: dict) -> None:
     """Bulk-update writable campaign fields."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     allowed = {
         "name", "description", "booking_url",
         "notion_url", "linear_url", "deadline",
@@ -409,7 +581,7 @@ async def get_campaign(campaign_id: str) -> dict | None:
 
 
 async def update_campaign_field(campaign_id: str, field: str, value: Any) -> None:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     await _campaigns().update_one(
         {"campaign_id": campaign_id},
         {"$set": {field: value, "updated_at": now}},
@@ -426,7 +598,7 @@ async def update_campaign_sync_state(
     error_detail: str | None = None,
 ) -> None:
     """Persist sync attempt/success metadata without losing the last good sync."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     sets: dict[str, Any] = {"updated_at": now}
 
     if attempt_at is not None:
@@ -455,7 +627,7 @@ async def delete_campaign(campaign_id: str) -> None:
 
 async def archive_campaign(campaign_id: str) -> None:
     """Soft-delete: set status to 'archived'."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     await _campaigns().update_one(
         {"campaign_id": campaign_id},
         {"$set": {"status": "archived", "updated_at": now}},
@@ -464,7 +636,7 @@ async def archive_campaign(campaign_id: str) -> None:
 
 async def unarchive_campaign(campaign_id: str) -> None:
     """Restore an archived campaign to 'active'."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     await _campaigns().update_one(
         {"campaign_id": campaign_id},
         {"$set": {"status": "active", "updated_at": now}},
@@ -485,17 +657,15 @@ async def get_campaign_progress(campaign_id: str) -> dict:
     """
     cursor = _participants().find(
         {"campaign_id": campaign_id},
-        {"email": 1, "status": 1, "google_event_id": 1},
+        {"email": 1, "status": 1, "google_event_id": 1, "progress_key": 1},
     )
 
     seen: dict[str, bool] = {}
     async for doc in cursor:
-        email = str(doc.get("email", "")).strip().lower()
-        if email:
-            progress_key = f"email:{email}"
-        else:
-            progress_key = f"event:{doc.get('google_event_id', '')}"
-
+        progress_key = str(doc.get("progress_key", "") or "").strip() or build_progress_key(
+            doc.get("email", ""),
+            doc.get("google_event_id", ""),
+        )
         seen.setdefault(progress_key, False)
         if doc.get("status") == "Completed":
             seen[progress_key] = True
@@ -513,13 +683,15 @@ async def get_all_campaigns_with_stats(
     """Return every campaign enriched with participant counts for *date*
     AND overall progress (booked/completed across all dates).
 
-    By default archived campaigns are excluded from the list.
+    By default archived campaigns are excluded from the list. When *date*
+    is omitted, the dashboard uses the configured operations-day timezone
+    instead of inheriting the host machine's local timezone.
     """
     campaigns = await get_all_campaigns()
     if not include_archived:
         campaigns = [c for c in campaigns if c.get("status") != "completed"]
     if date is None:
-        date = datetime.now().strftime("%Y-%m-%d")
+        date = operational_today_str()
     for c in campaigns:
         cid = c["campaign_id"]
 
@@ -547,15 +719,28 @@ async def upsert_participant(
     campaign_id: str, event_id: str, name: str, email: str,
     appointment_time: str, appointment_date: str,
     default_platform: str = "", default_model_tag: str = "",
+    appointment_start_raw: str = "",
+    appointment_start_utc: str = "",
+    appointment_timezone: str = "",
+    appointment_has_time: bool | None = None,
 ) -> None:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
+    model_fields = build_participant_model_fields(
+        event_id=event_id,
+        email=email,
+        appointment_date=appointment_date,
+        appointment_time=appointment_time,
+        appointment_start_raw=appointment_start_raw,
+        appointment_start_utc=appointment_start_utc,
+        appointment_timezone=appointment_timezone,
+        appointment_has_time=appointment_has_time,
+    )
     await _participants().update_one(
         {"campaign_id": campaign_id, "google_event_id": event_id},
         {
             "$set": {
                 "name": name, "email": email,
-                "appointment_time": appointment_time,
-                "appointment_date": appointment_date,
+                **model_fields,
                 "updated_at": now,
             },
             "$setOnInsert": {
@@ -584,25 +769,75 @@ async def get_participants_for_campaign(
     query: dict = {"campaign_id": campaign_id}
     if date is not None:
         query["appointment_date"] = date
-    sort_key = [("appointment_date", 1), ("appointment_time", 1)] if date is None else [("appointment_time", 1)]
-    cursor = _participants().find(query).sort(sort_key)
+    cursor = _participants().find(query)
     out: list[dict] = []
     async for doc in cursor:
         doc["_id"] = str(doc["_id"])
-        # ensure fields exist for older documents
-        doc.setdefault("notes", "")
-        doc.setdefault("issue_comment", "")
-        out.append(doc)
-    return out
+        out.append(_backfill_participant_doc(doc))
+    return sorted(out, key=_participant_sort_key)
 
 
 async def update_participant_field(
     campaign_id: str, event_id: str, field: str, value: Any,
 ) -> None:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
+    if field in {"email", "appointment_date", "appointment_time"}:
+        doc = await _participants().find_one(
+            {"campaign_id": campaign_id, "google_event_id": event_id},
+            {
+                "email": 1,
+                "appointment_date": 1,
+                "appointment_time": 1,
+            },
+        )
+        if doc is not None:
+            email = value if field == "email" else doc.get("email", "")
+            appointment_date = value if field == "appointment_date" else doc.get("appointment_date", "")
+            appointment_time = value if field == "appointment_time" else doc.get("appointment_time", "")
+            related_fields = build_participant_model_fields(
+                event_id=event_id,
+                email=str(email or ""),
+                appointment_date=str(appointment_date or ""),
+                appointment_time=str(appointment_time or ""),
+            )
+            await _participants().update_one(
+                {"campaign_id": campaign_id, "google_event_id": event_id},
+                {"$set": {field: value, **related_fields, "updated_at": now}},
+            )
+            return
     await _participants().update_one(
         {"campaign_id": campaign_id, "google_event_id": event_id},
         {"$set": {field: value, "updated_at": now}},
+    )
+
+
+async def update_participant_identity_and_schedule(
+    campaign_id: str,
+    event_id: str,
+    *,
+    name: str,
+    email: str,
+    appointment_date: str,
+    appointment_time: str,
+) -> None:
+    """Persist participant name/email/date/time together with normalized fields."""
+    now = utc_now_iso()
+    model_fields = build_participant_model_fields(
+        event_id=event_id,
+        email=email,
+        appointment_date=appointment_date,
+        appointment_time=appointment_time,
+    )
+    await _participants().update_one(
+        {"campaign_id": campaign_id, "google_event_id": event_id},
+        {
+            "$set": {
+                "name": name,
+                "email": email,
+                **model_fields,
+                "updated_at": now,
+            },
+        },
     )
 
 
@@ -614,7 +849,7 @@ async def update_participant_status(
             f"Unsupported participant status: {new_status!r}. "
             f"Expected one of {FIXED_PARTICIPANT_STATUSES}."
         )
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     update: dict[str, Any] = {"status": new_status, "updated_at": now}
     if new_status == "Completed":
         update["end_time"] = now
@@ -645,14 +880,19 @@ async def add_manual_participant(
     Returns the generated event_id.
     """
     event_id = f"manual-{secrets.token_hex(6)}"
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
+    model_fields = build_participant_model_fields(
+        event_id=event_id,
+        email=email,
+        appointment_date=appointment_date,
+        appointment_time=appointment_time,
+    )
     await _participants().insert_one({
         "campaign_id": campaign_id,
         "google_event_id": event_id,
         "name": name,
         "email": email,
-        "appointment_time": appointment_time or "",
-        "appointment_date": appointment_date,
+        **model_fields,
         "platform": default_platform,
         "model_tag": default_model_tag,
         "status": "Booked",
@@ -694,7 +934,7 @@ async def bulk_update_participant_field(
     value: Any,
 ) -> int:
     """Update a single field for multiple participants at once."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     result = await _participants().update_many(
         {"campaign_id": campaign_id, "google_event_id": {"$in": event_ids}},
         {"$set": {field: value, "updated_at": now}},
@@ -714,7 +954,7 @@ async def bulk_update_participant_status(
             f"Expected one of {FIXED_PARTICIPANT_STATUSES}."
         )
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     update: dict[str, Any] = {"status": new_status, "updated_at": now}
     if new_status == "Completed":
         update["end_time"] = now
@@ -741,10 +981,13 @@ async def get_participants_for_export(
     query: dict = {"campaign_id": campaign_id}
     if date:
         query["appointment_date"] = date
-    sort_key = [("appointment_date", 1), ("appointment_time", 1)]
-    cursor = _participants().find(query).sort(sort_key)
-    out: list[dict] = []
+    cursor = _participants().find(query)
+    participants: list[dict] = []
     async for doc in cursor:
+        participants.append(_backfill_participant_doc(doc))
+    participants = sorted(participants, key=_participant_sort_key)
+    out: list[dict] = []
+    for doc in participants:
         out.append({
             "name": doc.get("name", ""),
             "email": doc.get("email", ""),

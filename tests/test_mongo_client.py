@@ -158,6 +158,47 @@ class TestGetCampaigns:
         assert doc["last_sync_error_detail"] == ""
 
 
+class TestOperationalDayTimezone:
+    async def test_resolve_operations_timezone_name_prefers_app_day_timezone(self, monkeypatch):
+        monkeypatch.setenv("APP_DAY_TIMEZONE", "America/Los_Angeles")
+        monkeypatch.delenv("TZ", raising=False)
+
+        assert mc.resolve_operations_timezone_name() == "America/Los_Angeles"
+
+    async def test_resolve_operations_timezone_name_falls_back_to_tz_env(self, monkeypatch):
+        monkeypatch.delenv("APP_DAY_TIMEZONE", raising=False)
+        monkeypatch.setenv("TZ", "Europe/Berlin")
+
+        assert mc.resolve_operations_timezone_name() == "Europe/Berlin"
+
+    async def test_resolve_operations_timezone_name_falls_back_to_utc_for_invalid_values(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("APP_DAY_TIMEZONE", "Mars/Olympus")
+        monkeypatch.delenv("TZ", raising=False)
+
+        assert mc.resolve_operations_timezone_name() == "UTC"
+
+    @pytest.mark.asyncio
+    async def test_dashboard_stats_default_to_operational_day(self, monkeypatch):
+        monkeypatch.setattr(mc, "operational_today_str", lambda: "2026-03-23")
+
+        cid = await mc.create_campaign({"name": "OpsDay"})
+        await mc.upsert_participant(
+            cid, "ops-1", "Alice", "alice@test.com", "09:00", "2026-03-23",
+        )
+        await mc.upsert_participant(
+            cid, "ops-2", "Bob", "bob@test.com", "11:00", "2026-03-24",
+        )
+
+        campaigns = await mc.get_all_campaigns_with_stats()
+
+        assert campaigns[0]["today_total"] == 1
+        assert campaigns[0]["today_booked"] == 1
+        assert campaigns[0]["today_completed"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Participant CRUD
 # ---------------------------------------------------------------------------
@@ -173,6 +214,31 @@ class TestParticipantCRUD:
         assert len(parts) == 1
         assert parts[0]["name"] == "Alice"
         assert parts[0]["issue_comment"] == ""  # default from setOnInsert
+        assert parts[0]["progress_key"] == "email:alice@test.com"
+        assert parts[0]["appointment_sort_key"] == "2024-06-15T10:00:00"
+
+    @pytest.mark.asyncio
+    async def test_upsert_can_store_richer_calendar_datetime_fields(self):
+        cid = await mc.create_campaign({"name": "P1b"})
+        await mc.upsert_participant(
+            cid,
+            "evt-1b",
+            "Alice",
+            "alice@test.com",
+            "09:15",
+            "2026-03-23",
+            appointment_start_raw="2026-03-23T09:15:00-07:00",
+            appointment_start_utc="2026-03-23T16:15:00+00:00",
+            appointment_timezone="America/Los_Angeles",
+            appointment_has_time=True,
+        )
+
+        parts = await mc.get_participants_for_campaign(cid, "2026-03-23")
+
+        assert parts[0]["appointment_start_raw"] == "2026-03-23T09:15:00-07:00"
+        assert parts[0]["appointment_start_utc"] == "2026-03-23T16:15:00+00:00"
+        assert parts[0]["appointment_timezone"] == "America/Los_Angeles"
+        assert parts[0]["appointment_has_time"] is True
 
     @pytest.mark.asyncio
     async def test_upsert_updates_existing(self):
@@ -266,6 +332,79 @@ class TestManualParticipant:
         assert len(parts) == 1
         assert parts[0]["issue_comment"] == ""
         assert parts[0]["status"] == "Booked" # removed pending status, so manual starts as Booked 
+        assert parts[0]["appointment_start_raw"] == "2024-06-15T15:00:00"
+        assert parts[0]["appointment_start_utc"] == ""
+
+
+class TestParticipantNormalization:
+    @pytest.mark.asyncio
+    async def test_update_participant_email_recomputes_progress_key(self):
+        cid = await mc.create_campaign({"name": "Norm1"})
+        await mc.upsert_participant(
+            cid, "norm-1", "Alice", "alice@test.com", "10:00", "2026-03-23",
+        )
+
+        await mc.update_participant_field(
+            cid,
+            "norm-1",
+            "email",
+            "alice+updated@test.com",
+        )
+
+        participant = (await mc.get_participants_for_campaign(cid, "2026-03-23"))[0]
+        assert participant["progress_key"] == "email:alice+updated@test.com"
+
+    @pytest.mark.asyncio
+    async def test_update_participant_identity_and_schedule_resets_manualized_schedule_fields(self):
+        cid = await mc.create_campaign({"name": "Norm2"})
+        await mc.upsert_participant(
+            cid,
+            "norm-2",
+            "Alice",
+            "alice@test.com",
+            "09:15",
+            "2026-03-23",
+            appointment_start_raw="2026-03-23T09:15:00-07:00",
+            appointment_start_utc="2026-03-23T16:15:00+00:00",
+            appointment_timezone="America/Los_Angeles",
+            appointment_has_time=True,
+        )
+
+        await mc.update_participant_identity_and_schedule(
+            cid,
+            "norm-2",
+            name="Alice Updated",
+            email="alice.updated@test.com",
+            appointment_date="2026-03-24",
+            appointment_time="11:45",
+        )
+
+        participant = (await mc.get_participants_for_campaign(cid, "2026-03-24"))[0]
+        assert participant["name"] == "Alice Updated"
+        assert participant["progress_key"] == "email:alice.updated@test.com"
+        assert participant["appointment_start_raw"] == "2026-03-24T11:45:00"
+        assert participant["appointment_start_utc"] == ""
+        assert participant["appointment_timezone"] == ""
+        assert participant["appointment_sort_key"] == "2026-03-24T11:45:00"
+
+    @pytest.mark.asyncio
+    async def test_legacy_rows_get_derived_fields_when_loaded(self):
+        cid = await mc.create_campaign({"name": "Norm3"})
+        await mc._participants().insert_one({
+            "campaign_id": cid,
+            "google_event_id": "norm-3",
+            "name": "Legacy",
+            "email": "legacy@test.com",
+            "appointment_date": "2026-03-23",
+            "appointment_time": "08:30",
+            "status": "Booked",
+        })
+
+        participant = (await mc.get_participants_for_campaign(cid, "2026-03-23"))[0]
+
+        assert participant["progress_key"] == "email:legacy@test.com"
+        assert participant["appointment_start_raw"] == "2026-03-23T08:30:00"
+        assert participant["appointment_sort_key"] == "2026-03-23T08:30:00"
 
 
 # ---------------------------------------------------------------------------

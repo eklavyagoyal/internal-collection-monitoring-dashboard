@@ -17,13 +17,14 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from .mongo_client import ensure_indexes, upsert_participant, get_synced_dates_for_campaign
+from .mongo_client import ensure_indexes, upsert_participant
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ TOKEN_PATH = os.path.join(_PROJECT_ROOT, "token.json")
 _TOKEN_CACHE = os.path.join("/tmp", "nexus_token_cache.json")
 
 _cached_creds: Credentials | None = None
+_calendar_timezone_cache: dict[str, str] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +61,80 @@ def _save_token(creds: Credentials) -> None:
         except OSError:
             continue
     log.warning("Could not persist token to any writable path")
+
+
+def _resolve_timezone_name(timezone_name: str | None) -> str:
+    raw = str(timezone_name or "").strip()
+    if not raw:
+        return "UTC"
+    try:
+        ZoneInfo(raw)
+        return raw
+    except ZoneInfoNotFoundError:
+        return "UTC"
+
+
+def _zoneinfo_or_utc(timezone_name: str | None) -> ZoneInfo:
+    return ZoneInfo(_resolve_timezone_name(timezone_name))
+
+
+def _get_calendar_timezone(calendar_id: str) -> str:
+    cached = _calendar_timezone_cache.get(calendar_id)
+    if cached:
+        return cached
+    service = build("calendar", "v3", credentials=_get_credentials())
+    calendar = service.calendars().get(calendarId=calendar_id).execute()
+    resolved = _resolve_timezone_name(calendar.get("timeZone"))
+    _calendar_timezone_cache[calendar_id] = resolved
+    return resolved
+
+
+def _calendar_day_bounds(
+    date_str: str | None,
+    calendar_timezone: str,
+) -> tuple[datetime, datetime, str]:
+    zone = _zoneinfo_or_utc(calendar_timezone)
+    if date_str:
+        target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    else:
+        target_date = datetime.now(zone).date()
+    start = datetime.combine(target_date, datetime.min.time(), tzinfo=zone)
+    end = start + timedelta(days=1)
+    return start, end, target_date.strftime("%Y-%m-%d")
+
+
+def _normalize_google_event_start(
+    start: dict,
+    *,
+    calendar_timezone: str,
+) -> dict[str, object]:
+    raw_datetime = str(start.get("dateTime", "") or "").strip()
+    raw_date = str(start.get("date", "") or "").strip()
+    timezone_name = _resolve_timezone_name(calendar_timezone)
+    zone = _zoneinfo_or_utc(timezone_name)
+
+    if raw_datetime:
+        parsed = datetime.fromisoformat(raw_datetime.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=zone)
+        local_dt = parsed.astimezone(zone)
+        return {
+            "appointment_date": local_dt.strftime("%Y-%m-%d"),
+            "appointment_time": local_dt.strftime("%H:%M"),
+            "appointment_start_raw": raw_datetime,
+            "appointment_start_utc": parsed.astimezone(timezone.utc).isoformat(),
+            "appointment_timezone": timezone_name,
+            "appointment_has_time": True,
+        }
+
+    return {
+        "appointment_date": raw_date,
+        "appointment_time": "",
+        "appointment_start_raw": raw_date,
+        "appointment_start_utc": "",
+        "appointment_timezone": timezone_name,
+        "appointment_has_time": False,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -123,24 +199,18 @@ def _fetch_events_for_date(
 ) -> list[dict]:
     """Fetch events for a given *date_str* (YYYY-MM-DD) or today."""
     service = build("calendar", "v3", credentials=_get_credentials())
-
-    if date_str:
-        target = datetime.strptime(date_str, "%Y-%m-%d")
-    else:
-        target = datetime.now()
-
-    sod = target.replace(hour=0, minute=0, second=0, microsecond=0)
-    eod = sod + timedelta(days=1) - timedelta(seconds=1)
-    tz = datetime.now(timezone.utc).astimezone().tzinfo
+    calendar_timezone = _get_calendar_timezone(calendar_id)
+    sod, eod, _ = _calendar_day_bounds(date_str, calendar_timezone)
 
     result = (
         service.events()
         .list(
             calendarId=calendar_id,
-            timeMin=sod.replace(tzinfo=tz).isoformat(),
-            timeMax=eod.replace(tzinfo=tz).isoformat(),
+            timeMin=sod.isoformat(),
+            timeMax=eod.isoformat(),
             singleEvents=True,
             orderBy="startTime",
+            timeZone=calendar_timezone,
         )
         .execute()
     )
@@ -161,16 +231,18 @@ def _fetch_events_for_date(
                 email = atts[0].get("email", "")
 
         start = ev.get("start", {})
-        raw = start.get("dateTime", start.get("date", ""))
-        try:
-            appt = datetime.fromisoformat(raw).strftime("%H:%M")
-        except (ValueError, TypeError):
-            appt = raw
+        appointment = _normalize_google_event_start(
+            start,
+            calendar_timezone=calendar_timezone,
+        )
 
-        parsed.append(dict(
-            event_id=ev["id"], name=name, email=email,
-            appointment_time=appt, summary=summary,
-        ))
+        parsed.append({
+            "event_id": ev["id"],
+            "name": name,
+            "email": email,
+            "summary": summary,
+            **appointment,
+        })
     return parsed
 
 
@@ -211,7 +283,6 @@ async def sync_calendar_for_campaign(
     """
     await ensure_indexes()
     cid = campaign["campaign_id"]
-    target_date = date_str or datetime.now().strftime("%Y-%m-%d")
 
     # Build list of (calendar_id, keyword) pairs ─ supports legacy + multi.
     cal_configs: list[tuple[str, str]] = []
@@ -249,9 +320,13 @@ async def sync_calendar_for_campaign(
                 name=e["name"],
                 email=e["email"],
                 appointment_time=e["appointment_time"],
-                appointment_date=target_date,
+                appointment_date=e["appointment_date"],
                 default_platform=campaign.get("default_platform", ""),
                 default_model_tag=campaign.get("default_model_tag", ""),
+                appointment_start_raw=str(e.get("appointment_start_raw", "") or ""),
+                appointment_start_utc=str(e.get("appointment_start_utc", "") or ""),
+                appointment_timezone=str(e.get("appointment_timezone", "") or ""),
+                appointment_has_time=bool(e.get("appointment_has_time")),
             )
         total_synced += len(events)
 

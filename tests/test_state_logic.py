@@ -9,6 +9,8 @@ mirrors the state vars, then call the property bodies directly.
 import pytest
 from datetime import datetime
 
+import nexus_track.state as state_module
+
 from nexus_track.state import (
     _build_app_refresh_health,
     _build_campaign_calendar_payload,
@@ -96,7 +98,7 @@ class _MockState:
 
     @property
     def display_date_label(self) -> str:
-        return _display_date_label(self.selected_date or datetime.now().strftime("%Y-%m-%d"))
+        return _display_date_label(self.selected_date or state_module.operational_today_str())
 
     @property
     def campaign_last_sync(self) -> str:
@@ -203,7 +205,7 @@ class TestDisplayDateLabel:
         assert "Today" in label
 
     def test_today_date_shows_today(self):
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_str = state_module.operational_today_str()
         s = _MockState(selected_date=today_str)
         label = s.display_date_label
         assert "Today" in label
@@ -675,6 +677,12 @@ class TestIssueHelpers:
 
 
 class TestScopeMessagingHelpers:
+    def test_dashboard_day_metric_label_uses_operational_today(self, monkeypatch):
+        monkeypatch.setattr(state_module, "operational_today_str", lambda: "2026-03-23")
+
+        assert _dashboard_day_metric_label("2026-03-23") == "Today"
+        assert "Today" in _display_date_label("2026-03-23")
+
     def test_dashboard_day_metric_label_uses_day_for_non_today(self):
         assert _dashboard_day_metric_label("1999-01-01") == "Day"
 
