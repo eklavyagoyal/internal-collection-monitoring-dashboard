@@ -7,6 +7,7 @@ from ..components.design_tokens import (
     ACCENT,
     ACCENT_SOFT,
     AMBER,
+    AMBER_SOFT,
     BORDER,
     BORDER_SUBTLE,
     CARD_BG,
@@ -25,6 +26,8 @@ from ..components.design_tokens import (
 
 def participant_row(p: dict) -> rx.Component:
     eid = p["google_event_id"].to(str)
+    has_issue = p["_has_issue"]
+    issue_preview = p["_issue_preview"].to(str)
     is_selected = p["_is_selected"]
     name = p["name"].to(str)
     email = p["email"].to(str)
@@ -34,10 +37,8 @@ def participant_row(p: dict) -> rx.Component:
     model_tag = p["model_tag"].to(str)
     status = p["status"].to(str)
     notes = p["notes"].to(str)
-    issue_comment = p["issue_comment"].to(str)
     save_state = p["_save_state"].to(str)
 
-    has_issue = issue_comment != ""
     is_completed = status == "Completed"
 
     return rx.box(
@@ -145,6 +146,16 @@ def participant_row(p: dict) -> rx.Component:
                     rx.fragment(),
                 ),
             ),
+            rx.icon_button(
+                rx.icon("triangle-alert", size=13),
+                size="1",
+                variant=rx.cond(has_issue, "soft", "ghost"),
+                color_scheme="amber",
+                on_click=NexusState.open_issue_editor(eid),
+                cursor="pointer",
+                flex_shrink="0",
+                _hover={"background": AMBER_SOFT},
+            ),
             # Edit button
             rx.icon_button(
                 rx.icon("pencil", size=13),
@@ -175,22 +186,82 @@ def participant_row(p: dict) -> rx.Component:
             width="100%",
             overflow="hidden",
         ),
+        rx.cond(
+            has_issue,
+            rx.box(
+                rx.hstack(
+                    rx.hstack(
+                        rx.icon("triangle-alert", size=13, color=AMBER),
+                        rx.text(
+                            "Issue",
+                            size="1",
+                            weight="bold",
+                            color=AMBER,
+                        ),
+                        spacing="1",
+                        align="center",
+                    ),
+                    rx.spacer(),
+                    rx.button(
+                        "Edit",
+                        size="1",
+                        variant="ghost",
+                        color_scheme="amber",
+                        on_click=NexusState.open_issue_editor(eid),
+                        cursor="pointer",
+                    ),
+                    rx.button(
+                        "Resolve",
+                        size="1",
+                        variant="ghost",
+                        color_scheme="gray",
+                        on_click=NexusState.clear_issue(eid),
+                        cursor="pointer",
+                    ),
+                    spacing="2",
+                    align="center",
+                    width="100%",
+                ),
+                rx.text(
+                    issue_preview,
+                    size="1",
+                    color=TEXT,
+                    line_height="1.45",
+                    margin_top="6px",
+                ),
+                padding="10px 12px",
+                margin_top="10px",
+                border_radius=RADIUS_SM,
+                background=AMBER_SOFT,
+                border=BORDER_SUBTLE,
+            ),
+            rx.fragment(),
+        ),
         # ── Notes row (inline, no extra icon)
         rx.box(
-            rx.el.input(
-                default_value=notes,
-                placeholder="Add notes...",
-                on_blur=lambda e: NexusState.set_notes(eid, e),
-                style={
-                    "width": "100%",
-                    "padding": "5px 10px",
-                    "border_radius": RADIUS_SM,
-                    "border": "1px solid rgba(255,255,255,0.07)",
-                    "font_size": "12px",
-                    "outline": "none",
-                    "background": "rgba(255,255,255,0.03)",
-                    "color": "inherit",
-                },
+            rx.vstack(
+                rx.text(
+                    "Notes",
+                    size="1",
+                    weight="medium",
+                    color=SUBTEXT,
+                ),
+                rx.el.input(
+                    default_value=notes,
+                    placeholder="Routine notes...",
+                    on_blur=lambda e: NexusState.set_notes(eid, e),
+                    style={
+                        "width": "100%",
+                        "padding": "5px 10px",
+                        "border_radius": RADIUS_SM,
+                        "border": "1px solid rgba(255,255,255,0.07)",
+                        "font_size": "12px",
+                        "outline": "none",
+                        "background": "rgba(255,255,255,0.03)",
+                        "color": "inherit",
+                    },
+                ),
+                spacing="1",
             ),
             padding_top="10px",
             margin_top="10px",

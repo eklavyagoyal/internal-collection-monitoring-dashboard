@@ -135,6 +135,75 @@ def _filter_selection_to_visible(
     return [event_id for event_id in selected_ids if event_id in visible]
 
 
+def _count_issue_participants(participants: list[dict]) -> int:
+    return sum(
+        1
+        for participant in participants
+        if str(participant.get("issue_comment", "") or "").strip()
+    )
+
+
+def _issue_preview_text(issue_comment: str, *, limit: int = 96) -> str:
+    normalized = " ".join(str(issue_comment or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 1].rstrip() + "…"
+
+
+def _issue_filter_label(
+    total_issues: int,
+    visible_issues: int,
+    *,
+    participant_view_is_filtered: bool,
+) -> str:
+    if total_issues == 0:
+        return "Issues only"
+    if participant_view_is_filtered and visible_issues != total_issues:
+        return f"Issues only ({visible_issues}/{total_issues})"
+    return f"Issues only ({total_issues})"
+
+
+def _issue_summary_label(
+    total_issues: int,
+    visible_issues: int,
+    *,
+    participant_view_is_filtered: bool,
+) -> str:
+    if total_issues == 0:
+        return ""
+    if participant_view_is_filtered and visible_issues != total_issues:
+        return f"{visible_issues} of {total_issues} issues in view"
+    issue_word = "issue" if visible_issues == 1 else "issues"
+    return f"{visible_issues} {issue_word} in view"
+
+
+def _participant_empty_state(
+    *,
+    total_participants: int,
+    visible_participants: int,
+    total_issues: int,
+    filter_has_issue: bool,
+) -> tuple[str, str]:
+    if visible_participants > 0:
+        return "", ""
+    if total_participants > 0 and filter_has_issue:
+        if total_issues == 0:
+            return (
+                "No flagged issues yet",
+                "Flag an issue on any participant row to track exceptions here.",
+            )
+        return (
+            "No issues match the current view",
+            "Clear search or other filters to bring flagged participants back into view.",
+        )
+    if total_participants > 0:
+        return (
+            "No participants match the current view",
+            "Adjust search or filters to bring participants back into view.",
+        )
+    return "No participants yet", "Sync a calendar or add participants manually."
+
+
 class BreakdownModel(rx.Base):
     model: str = ""
     total: int = 0
@@ -364,6 +433,7 @@ class NexusState(rx.State):
                 or q in p.get("platform", "").lower()
                 or q in p.get("model_tag", "").lower()
                 or q in p.get("notes", "").lower()
+                or q in p.get("issue_comment", "").lower()
             ]
 
         # Platform filter
@@ -406,6 +476,66 @@ class NexusState(rx.State):
         return [p for p in self.sorted_filtered_participants if p.get("status") == "Completed"]
 
     @rx.var(cache=True)
+    def visible_total_count(self) -> int:
+        return len(self.sorted_filtered_participants)
+
+    @rx.var(cache=True)
+    def visible_completed_count(self) -> int:
+        return sum(
+            1 for p in self.sorted_filtered_participants if p.get("status") == "Completed"
+        )
+
+    @rx.var(cache=True)
+    def visible_booked_count(self) -> int:
+        return sum(
+            1 for p in self.sorted_filtered_participants if p.get("status") != "Completed"
+        )
+
+    @rx.var(cache=True)
+    def total_issue_count(self) -> int:
+        return _count_issue_participants(self.participants)
+
+    @rx.var(cache=True)
+    def visible_issue_count(self) -> int:
+        return _count_issue_participants(self.sorted_filtered_participants)
+
+    @rx.var(cache=True)
+    def issue_filter_label(self) -> str:
+        return _issue_filter_label(
+            self.total_issue_count,
+            self.visible_issue_count,
+            participant_view_is_filtered=self.participant_view_is_filtered,
+        )
+
+    @rx.var(cache=True)
+    def issue_summary_label(self) -> str:
+        return _issue_summary_label(
+            self.total_issue_count,
+            self.visible_issue_count,
+            participant_view_is_filtered=self.participant_view_is_filtered,
+        )
+
+    @rx.var(cache=True)
+    def participant_empty_title(self) -> str:
+        title, _ = _participant_empty_state(
+            total_participants=self.total_count,
+            visible_participants=self.visible_total_count,
+            total_issues=self.total_issue_count,
+            filter_has_issue=self.filter_has_issue,
+        )
+        return title
+
+    @rx.var(cache=True)
+    def participant_empty_description(self) -> str:
+        _, description = _participant_empty_state(
+            total_participants=self.total_count,
+            visible_participants=self.visible_total_count,
+            total_issues=self.total_issue_count,
+            filter_has_issue=self.filter_has_issue,
+        )
+        return description
+
+    @rx.var(cache=True)
     def participant_view_is_filtered(self) -> bool:
         return bool(self.search_query or self.active_filter_count)
 
@@ -444,6 +574,34 @@ class NexusState(rx.State):
     @rx.var(cache=True)
     def campaign_linear_url(self) -> str:
         return self.current_campaign.get("linear_url", "")
+
+    @rx.var(cache=True)
+    def editing_issue_participant_name(self) -> str:
+        event_id = self.editing_issue_event_id
+        if not event_id:
+            return ""
+        for participant in self.participants:
+            if participant.get("google_event_id") == event_id:
+                return participant.get("name", "") or "Participant"
+        return "Participant"
+
+    @rx.var(cache=True)
+    def editing_issue_has_existing_comment(self) -> bool:
+        event_id = self.editing_issue_event_id
+        if not event_id:
+            return False
+        for participant in self.participants:
+            if participant.get("google_event_id") == event_id:
+                return bool(str(participant.get("issue_comment", "") or "").strip())
+        return False
+
+    @rx.var(cache=True)
+    def issue_editor_action_label(self) -> str:
+        if self.editing_issue_comment.strip():
+            return "Save Issue"
+        if self.editing_issue_has_existing_comment:
+            return "Clear Issue"
+        return "Save Issue"
 
     @rx.var(cache=True)
     def campaign_deadline(self) -> str:
@@ -810,15 +968,21 @@ class NexusState(rx.State):
         if refresh_settings_view:
             await self.load_recent_admin_actions()
 
+    def _decorate_participant_for_ui(self, participant: dict, selected: set[str]) -> dict:
+        row = dict(participant)
+        issue_comment = str(row.get("issue_comment", "") or "")
+        row.setdefault("_save_state", "")
+        row["_has_issue"] = bool(issue_comment.strip())
+        row["_issue_preview"] = _issue_preview_text(issue_comment)
+        row["_is_selected"] = row.get("google_event_id", "") in selected
+        return row
+
     def _decorate_participants_for_ui(self, participants: list[dict]) -> list[dict]:
         selected = set(self.selected_ids)
         plain = _to_plain_python(participants) or []
         out: list[dict] = []
         for participant in plain:
-            row = dict(participant)
-            row.setdefault("_save_state", "")
-            row["_is_selected"] = row.get("google_event_id", "") in selected
-            out.append(row)
+            out.append(self._decorate_participant_for_ui(participant, selected))
         return out
 
     def _visible_participant_ids(self) -> list[str]:
@@ -833,14 +997,7 @@ class NexusState(rx.State):
             list(self.selected_ids),
             self._visible_participant_ids(),
         )
-        selected = set(self.selected_ids)
-        self.participants = [
-            {
-                **dict(participant),
-                "_is_selected": participant.get("google_event_id", "") in selected,
-            }
-            for participant in (_to_plain_python(self.participants) or [])
-        ]
+        self.participants = self._decorate_participants_for_ui(self.participants)
 
     def _refresh_loaded_participant_metrics(self) -> None:
         participants = _to_plain_python(self.participants) or []
@@ -868,14 +1025,15 @@ class NexusState(rx.State):
         self._sync_selection_state()
 
     def _clear_row_save_states(self) -> None:
-        self.participants = [
+        cleared = [
             {**dict(participant), "_save_state": ""}
             for participant in (_to_plain_python(self.participants) or [])
         ]
+        self.participants = self._decorate_participants_for_ui(cleared)
 
     def _set_row_save_state(self, event_ids: list[str], state: str) -> None:
         ids = set(event_ids)
-        self.participants = [
+        updated = [
             {
                 **dict(participant),
                 "_save_state": (
@@ -884,6 +1042,7 @@ class NexusState(rx.State):
             }
             for participant in (_to_plain_python(self.participants) or [])
         ]
+        self.participants = self._decorate_participants_for_ui(updated)
 
     def _snapshot_participants(self) -> list[dict]:
         return self._decorate_participants_for_ui(self.participants)
@@ -896,7 +1055,7 @@ class NexusState(rx.State):
             if row.get("google_event_id", "") in ids:
                 row = transform(row)
             updated.append(row)
-        self.participants = updated
+        self.participants = self._decorate_participants_for_ui(updated)
 
     async def _run_optimistic_participant_update(
         self,
@@ -1774,28 +1933,37 @@ class NexusState(rx.State):
         self.editing_issue_event_id = ""
         self.editing_issue_comment = ""
 
+    async def clear_issue(self, event_id: str):
+        cid = self.active_campaign_id
+        if not cid:
+            return
+        cleared = await self._run_optimistic_participant_update(
+            event_ids=[event_id],
+            apply_local=lambda: self._apply_participant_updates(
+                [event_id],
+                lambda participant: {
+                    **participant,
+                    "issue_comment": "",
+                },
+            ),
+            persist=lambda: db_update_field(
+                cid,
+                event_id,
+                "issue_comment",
+                "",
+            ),
+            refresh_metrics=False,
+        )
+        if cleared and self.editing_issue_event_id == event_id:
+            self.editing_issue_event_id = ""
+            self.editing_issue_comment = ""
+
     async def toggle_issue_flag(self, event_id: str):
         """Toggle issue flag: if comment exists, clear it; if empty, open editor."""
         for p in self.participants:
             if p.get("google_event_id") == event_id:
                 if p.get("issue_comment", "").strip():
-                    await self._run_optimistic_participant_update(
-                        event_ids=[event_id],
-                        apply_local=lambda: self._apply_participant_updates(
-                            [event_id],
-                            lambda participant: {
-                                **participant,
-                                "issue_comment": "",
-                            },
-                        ),
-                        persist=lambda: db_update_field(
-                            self.active_campaign_id,
-                            event_id,
-                            "issue_comment",
-                            "",
-                        ),
-                        refresh_metrics=False,
-                    )
+                    await self.clear_issue(event_id)
                 else:
                     # Open editor
                     self.open_issue_editor(event_id)

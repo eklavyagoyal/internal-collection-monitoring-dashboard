@@ -13,7 +13,12 @@ from nexus_track.state import (
     _compute_campaign_progress_from_participants,
     _compute_per_device_progress_from_participants,
     _compute_platform_model_breakdown_from_participants,
+    _count_issue_participants,
     _filter_selection_to_visible,
+    _issue_filter_label,
+    _issue_preview_text,
+    _issue_summary_label,
+    _participant_empty_state,
 )
 
 
@@ -304,3 +309,71 @@ class TestSelectionScopeHelpers:
             "evt-1",
             "evt-2",
         ]
+
+
+class TestIssueHelpers:
+    def test_count_issue_participants_ignores_blank_comments(self):
+        participants = [
+            {"issue_comment": "Late arrival"},
+            {"issue_comment": "   "},
+            {"issue_comment": ""},
+            {"issue_comment": "Device mismatch"},
+        ]
+
+        assert _count_issue_participants(participants) == 2
+
+    def test_issue_preview_text_collapses_whitespace(self):
+        preview = _issue_preview_text("  Device   failed\nwhile   scanning   ")
+
+        assert preview == "Device failed while scanning"
+
+    def test_issue_preview_text_truncates_long_comments(self):
+        long_comment = (
+            "Participant had a device swap, then a second verification mismatch, "
+            "and needed manual follow-up before completion."
+        )
+
+        preview = _issue_preview_text(long_comment, limit=50)
+
+        assert preview.endswith("…")
+        assert len(preview) == 50
+
+    def test_issue_filter_label_uses_visible_and_total_counts(self):
+        label = _issue_filter_label(
+            4,
+            2,
+            participant_view_is_filtered=True,
+        )
+
+        assert label == "Issues only (2/4)"
+
+    def test_issue_summary_label_uses_singular_when_needed(self):
+        label = _issue_summary_label(
+            1,
+            1,
+            participant_view_is_filtered=False,
+        )
+
+        assert label == "1 issue in view"
+
+    def test_participant_empty_state_distinguishes_issue_filters(self):
+        title, description = _participant_empty_state(
+            total_participants=8,
+            visible_participants=0,
+            total_issues=3,
+            filter_has_issue=True,
+        )
+
+        assert title == "No issues match the current view"
+        assert "bring flagged participants back into view" in description
+
+    def test_participant_empty_state_handles_no_issues_yet(self):
+        title, description = _participant_empty_state(
+            total_participants=8,
+            visible_participants=0,
+            total_issues=0,
+            filter_has_issue=True,
+        )
+
+        assert title == "No flagged issues yet"
+        assert "Flag an issue" in description

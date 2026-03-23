@@ -627,9 +627,19 @@ def _participant_filter_bar() -> rx.Component:
             ),
             # Issues toggle
             _filter_chip(
-                "Issues only",
+                NexusState.issue_filter_label,
                 NexusState.filter_has_issue,
                 NexusState.toggle_filter_has_issue(),
+            ),
+            rx.cond(
+                NexusState.total_issue_count > 0,
+                rx.badge(
+                    NexusState.issue_summary_label,
+                    color_scheme="amber",
+                    size="1",
+                    variant="soft",
+                ),
+                rx.fragment(),
             ),
             rx.spacer(),
             # Active filter badge + clear
@@ -753,10 +763,16 @@ def _issue_editor_dialog() -> rx.Component:
         NexusState.editing_issue_event_id != "",
         rx.dialog.root(
             rx.dialog.content(
-                rx.dialog.title("Edit Issue Comment"),
+                rx.dialog.title(
+                    rx.cond(
+                        NexusState.editing_issue_participant_name != "",
+                        "Issue for " + NexusState.editing_issue_participant_name,
+                        "Issue",
+                    ),
+                ),
                 rx.dialog.description(
-                    "Describe the issue with this participant. "
-                    "Leave blank and save to clear the issue flag.",
+                    "Describe the exception clearly so it stands apart from routine notes. "
+                    "Leave the field blank and save to resolve the issue.",
                 ),
                 rx.text_area(
                     value=NexusState.editing_issue_comment,
@@ -777,7 +793,7 @@ def _issue_editor_dialog() -> rx.Component:
                         ),
                     ),
                     rx.button(
-                        "Save",
+                        NexusState.issue_editor_action_label,
                         color_scheme="iris",
                         on_click=NexusState.save_issue_comment,
                         cursor="pointer",
@@ -1326,7 +1342,7 @@ def _delete_dialog() -> rx.Component:
 
 def _participant_list() -> rx.Component:
     return rx.cond(
-        NexusState.total_count > 0,
+        NexusState.visible_total_count > 0,
         rx.vstack(
             # ── Bookings section ──
             rx.hstack(
@@ -1342,7 +1358,7 @@ def _participant_list() -> rx.Component:
                     color=HEADING,
                 ),
                 rx.badge(
-                    NexusState.booked_count.to(str),
+                    NexusState.visible_booked_count.to(str),
                     color_scheme="amber",
                     size="1",
                     variant="soft",
@@ -1374,7 +1390,7 @@ def _participant_list() -> rx.Component:
                         align="center",
                     ),
                     rx.cond(
-                        NexusState.booked_count > 0,
+                        NexusState.visible_booked_count > 0,
                         rx.vstack(
                             rx.foreach(
                                 NexusState.booked_participants,
@@ -1407,7 +1423,7 @@ def _participant_list() -> rx.Component:
                     color=HEADING,
                 ),
                 rx.badge(
-                    NexusState.completed_count.to(str),
+                    NexusState.visible_completed_count.to(str),
                     color_scheme="green",
                     size="1",
                     variant="soft",
@@ -1423,7 +1439,7 @@ def _participant_list() -> rx.Component:
             rx.cond(
                 ~NexusState.completed_collapsed,
                 rx.cond(
-                    NexusState.completed_count > 0,
+                    NexusState.visible_completed_count > 0,
                     rx.vstack(
                         rx.foreach(
                             NexusState.completed_participants,
@@ -1451,13 +1467,13 @@ def _participant_list() -> rx.Component:
                     background=ACCENT_SOFT,
                 ),
                 rx.text(
-                    "No participants yet",
+                    NexusState.participant_empty_title,
                     size="3",
                     weight="medium",
                     color=HEADING,
                 ),
                 rx.text(
-                    "Sync a calendar or add participants manually.",
+                    NexusState.participant_empty_description,
                     size="2",
                     color=SUBTEXT,
                 ),

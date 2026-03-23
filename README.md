@@ -24,10 +24,11 @@ Built with **Reflex** (Python → React + FastAPI), **MongoDB** (async via Motor
 | **Inline Status** | Fixed `Booked ↔ Completed` workflow with completion timestamps |
 | **Platform & Model Tags** | Assign hardware platform + AI model version per participant |
 | **Inline Notes** | Freeform notes field on every row, saved on blur |
-| **Bulk Actions** | Select multiple rows → bulk mark `Booked` / `Completed` or delete selected rows |
-| **Sorting** | Click any column header to sort asc/desc (time, name, status) |
-| **Search** | Filter by name, email, platform, or model tag |
-| **CSV Export** | Download all participants for a campaign / date |
+| **Issue Workflow** | Flag participant issues, preview them inline, filter to exceptions only, and resolve them quickly |
+| **Bulk Actions** | Select visible rows → bulk mark `Booked` / `Completed`, assign platform/model tags, or admin-delete selected rows |
+| **Sorting** | Click column headers to sort by time or participant name |
+| **Search** | Filter by name, email, platform, model tag, notes, or issue comment |
+| **CSV Export** | Download a campaign-wide CSV including notes and issue comments |
 
 ### Calendar Integration
 | Feature | Detail |
@@ -44,6 +45,7 @@ Built with **Reflex** (Python → React + FastAPI), **MongoDB** (async via Motor
 | **Date Navigation** | Step forward/back by day to review historical data |
 | **Dark / Light Mode** | Toggle with a single click |
 | **Configurable Labels** | Add/remove platforms and model tags from Settings — no redeploy needed |
+| **Admin Safety Rails** | Admin PIN gates campaign/settings mutations and protected actions write lightweight audit events |
 
 ---
 
@@ -167,7 +169,7 @@ reflex run
     │   ├── design_tokens.py    # Centralised design system (colors, radii, helpers)
     │   ├── navbar.py           # Sticky top bar with breadcrumb support
     │   ├── campaign_card.py    # Dashboard campaign card with gradient stripe
-    │   ├── participant_row.py  # Participant row with checkbox & inline notes
+    │   ├── participant_row.py  # Participant row with bulk selection, issue actions, and notes
     │   └── stat_card.py        # KPI stat card (fixed 96px height)
     │
     └── pages/
@@ -196,11 +198,21 @@ All colours, shadows, radii, and component helpers live in `components/design_to
 - Marking a participant as **Completed** captures `end_time`
 - Returning a participant to **Booked** clears completion timestamps
 
+### Admin Safety
+- Campaign creation, campaign editing, campaign deletion, bulk deletion, and settings mutation are gated behind admin mode
+- Admin PINs are stored with PBKDF2 hashing instead of raw SHA-256
+- Protected changes write lightweight audit events for visibility on the Settings page
+
 ### Campaign Progress
 - Overall campaign progress is based on **unique participants** across the full campaign
 - Participants are deduplicated by normalised email when available
 - Rows without an email fall back to their event ID, so blank-email bookings are never merged accidentally
 - Daily tables still show appointment rows for the currently loaded date range/view
+
+### Participant Operations
+- Bulk selection follows the current visible filtered view, so hidden rows are never changed by accident
+- Row-level platform, model, status, notes, and issue updates save optimistically and show lightweight save feedback
+- Issue comments are distinct from routine notes and stay included in CSV exports
 
 ---
 
