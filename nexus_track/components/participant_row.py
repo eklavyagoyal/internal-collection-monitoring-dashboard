@@ -25,6 +25,7 @@ from ..components.design_tokens import (
 
 def participant_row(p: dict) -> rx.Component:
     eid = p["google_event_id"].to(str)
+    is_selected = p["_is_selected"]
     name = p["name"].to(str)
     email = p["email"].to(str)
     time = p["appointment_time"].to(str)
@@ -34,6 +35,7 @@ def participant_row(p: dict) -> rx.Component:
     status = p["status"].to(str)
     notes = p["notes"].to(str)
     issue_comment = p["issue_comment"].to(str)
+    save_state = p["_save_state"].to(str)
 
     has_issue = issue_comment != ""
     is_completed = status == "Completed"
@@ -41,6 +43,14 @@ def participant_row(p: dict) -> rx.Component:
     return rx.box(
         # ── Main row (never wraps)
         rx.hstack(
+            rx.checkbox(
+                checked=is_selected,
+                on_change=lambda _v: NexusState.toggle_select(eid),
+                size="1",
+                color_scheme="iris",
+                cursor="pointer",
+                flex_shrink="0",
+            ),
             # Completion checkbox
             rx.checkbox(
                 checked=is_completed,
@@ -115,6 +125,25 @@ def participant_row(p: dict) -> rx.Component:
                 size="1",
                 variant="soft",
                 flex_shrink="0",
+            ),
+            rx.cond(
+                save_state == "saving",
+                rx.badge(
+                    "Saving",
+                    color_scheme="blue",
+                    size="1",
+                    variant="soft",
+                ),
+                rx.cond(
+                    save_state == "saved",
+                    rx.badge(
+                        "Saved",
+                        color_scheme="green",
+                        size="1",
+                        variant="soft",
+                    ),
+                    rx.fragment(),
+                ),
             ),
             # Edit button
             rx.icon_button(

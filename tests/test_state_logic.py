@@ -9,6 +9,13 @@ mirrors the state vars, then call the property bodies directly.
 import pytest
 from datetime import datetime
 
+from nexus_track.state import (
+    _compute_campaign_progress_from_participants,
+    _compute_per_device_progress_from_participants,
+    _compute_platform_model_breakdown_from_participants,
+    _filter_selection_to_visible,
+)
+
 
 # ---------------------------------------------------------------------------
 # Lightweight mock replicating NexusState computed logic
@@ -223,3 +230,77 @@ class TestLastSync:
     def test_invalid_returns_raw(self):
         s = _MockState({"last_sync_at": "bad-date"})
         assert s.campaign_last_sync == "bad-date"
+
+
+class TestParticipantAggregationHelpers:
+    def test_campaign_progress_deduplicates_by_email(self):
+        participants = [
+            {"google_event_id": "e1", "email": "same@test.com", "status": "Booked"},
+            {"google_event_id": "e2", "email": "same@test.com", "status": "Completed"},
+            {"google_event_id": "e3", "email": "other@test.com", "status": "Booked"},
+        ]
+
+        assert _compute_campaign_progress_from_participants(participants) == {
+            "booked": 2,
+            "completed": 1,
+        }
+
+    def test_campaign_progress_uses_event_id_when_email_is_blank(self):
+        participants = [
+            {"google_event_id": "e1", "email": "", "status": "Completed"},
+            {"google_event_id": "e2", "email": "", "status": "Booked"},
+        ]
+
+        assert _compute_campaign_progress_from_participants(participants) == {
+            "booked": 2,
+            "completed": 1,
+        }
+
+    def test_per_device_progress_counts_totals_and_completed(self):
+        participants = [
+            {"platform": "Orb", "status": "Booked"},
+            {"platform": "Orb", "status": "Completed"},
+            {"platform": "Kiosk-v2", "status": "Completed"},
+            {"platform": "", "status": "Completed"},
+        ]
+
+        assert _compute_per_device_progress_from_participants(participants) == {
+            "Orb": {"total": 2, "completed": 1},
+            "Kiosk-v2": {"total": 1, "completed": 1},
+        }
+
+    def test_platform_model_breakdown_groups_by_platform_and_model(self):
+        participants = [
+            {"platform": "Orb", "model_tag": "v5.0", "status": "Booked"},
+            {"platform": "Orb", "model_tag": "v5.0", "status": "Completed"},
+            {"platform": "Orb", "model_tag": "", "status": "Completed"},
+            {"platform": "Kiosk-v2", "model_tag": "beta", "status": "Completed"},
+        ]
+
+        assert _compute_platform_model_breakdown_from_participants(participants) == {
+            "Orb": {
+                "v5.0": {"total": 2, "completed": 1},
+                "": {"total": 1, "completed": 1},
+            },
+            "Kiosk-v2": {
+                "beta": {"total": 1, "completed": 1},
+            },
+        }
+
+
+class TestSelectionScopeHelpers:
+    def test_filter_selection_to_visible_drops_hidden_ids(self):
+        selected_ids = ["evt-1", "evt-2", "evt-3"]
+        visible_ids = ["evt-2", "evt-4"]
+
+        assert _filter_selection_to_visible(selected_ids, visible_ids) == ["evt-2"]
+
+    def test_filter_selection_to_visible_preserves_selected_order(self):
+        selected_ids = ["evt-3", "evt-1", "evt-2"]
+        visible_ids = ["evt-1", "evt-2", "evt-3"]
+
+        assert _filter_selection_to_visible(selected_ids, visible_ids) == [
+            "evt-3",
+            "evt-1",
+            "evt-2",
+        ]

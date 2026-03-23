@@ -886,7 +886,7 @@ def _bulk_action_bar() -> rx.Component:
                         cursor="pointer",
                     ),
                     rx.text(
-                        NexusState.selection_count.to(str) + " selected",
+                        NexusState.selection_label,
                         size="2",
                         weight="bold",
                         color=ACCENT,
@@ -895,7 +895,6 @@ def _bulk_action_bar() -> rx.Component:
                     align="center",
                 ),
                 rx.spacer(),
-                # Bulk status change
                 rx.button(
                     "Mark Completed",
                     size="1",
@@ -913,6 +912,48 @@ def _bulk_action_bar() -> rx.Component:
                     border_radius=RADIUS_SM,
                     on_click=NexusState.bulk_set_status("Booked"),
                     cursor="pointer",
+                ),
+                rx.select(
+                    NexusState.platforms,
+                    value=NexusState.bulk_platform_value,
+                    on_change=NexusState.set_bulk_platform_value,
+                    placeholder="Bulk platform",
+                    size="1",
+                    variant="soft",
+                    width="140px",
+                ),
+                rx.button(
+                    "Apply Platform",
+                    size="1",
+                    variant="soft",
+                    color_scheme="iris",
+                    border_radius=RADIUS_SM,
+                    on_click=NexusState.apply_bulk_platform,
+                    cursor="pointer",
+                ),
+                rx.cond(
+                    NexusState.all_model_tags.length() > 0,
+                    rx.fragment(
+                        rx.select(
+                            NexusState.all_model_tags,
+                            value=NexusState.bulk_model_value,
+                            on_change=NexusState.set_bulk_model_value,
+                            placeholder="Bulk model",
+                            size="1",
+                            variant="soft",
+                            width="140px",
+                        ),
+                        rx.button(
+                            "Apply Model",
+                            size="1",
+                            variant="soft",
+                            color_scheme="iris",
+                            border_radius=RADIUS_SM,
+                            on_click=NexusState.apply_bulk_model,
+                            cursor="pointer",
+                        ),
+                    ),
+                    rx.fragment(),
                 ),
                 rx.cond(
                     NexusState.admin_mode,
@@ -939,6 +980,14 @@ def _bulk_action_bar() -> rx.Component:
                 ),
                 spacing="2",
                 align="center",
+                width="100%",
+                flex_wrap="wrap",
+            ),
+            rx.text(
+                "Bulk actions only apply to participants visible in the current search and filter view.",
+                size="1",
+                color=SUBTEXT,
+                margin_top="10px",
             ),
             padding="12px 20px",
             border=BORDER_ACCENT,
@@ -1311,7 +1360,7 @@ def _participant_list() -> rx.Component:
                 rx.vstack(
                     # column header with sort
                     rx.hstack(
-                        rx.box(width="24px", flex_shrink="0"),  # checkbox spacer
+                        rx.box(width="54px", flex_shrink="0"),
                         _sort_header("Date / Time", "appointment_time", width="110px"),
                         _sort_header("Participant", "name"),
                         rx.text("Platform", size="1", weight="bold", width="130px", color=SUBTEXT),

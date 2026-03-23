@@ -31,11 +31,8 @@ from .backend.mongo_client import (
     get_all_campaigns_with_stats,
     get_recent_audit_events,
     get_campaign,
-    get_campaign_progress,
     get_participants_for_campaign,
     get_participants_for_export,
-    get_per_device_progress,
-    get_platform_model_breakdown,
     get_settings,
     hash_admin_pin as db_hash_admin_pin,
     record_audit_event as db_record_audit_event,
@@ -76,6 +73,66 @@ def _to_plain_python(obj):
     elif isinstance(obj, (list, tuple)):
         return [_to_plain_python(item) for item in obj]
     return obj
+
+
+def _participant_identity_key(participant: dict) -> str:
+    email = str(participant.get("email", "") or "").strip().lower()
+    if email:
+        return f"email:{email}"
+    return f"event:{participant.get('google_event_id', '')}"
+
+
+def _compute_campaign_progress_from_participants(
+    participants: list[dict],
+) -> dict[str, int]:
+    booked: set[str] = set()
+    completed: set[str] = set()
+    for participant in participants:
+        key = _participant_identity_key(participant)
+        booked.add(key)
+        if participant.get("status") == "Completed":
+            completed.add(key)
+    return {"booked": len(booked), "completed": len(completed)}
+
+
+def _compute_per_device_progress_from_participants(
+    participants: list[dict],
+) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for participant in participants:
+        platform = str(participant.get("platform", "") or "").strip()
+        if not platform:
+            continue
+        row = result.setdefault(platform, {"total": 0, "completed": 0})
+        row["total"] += 1
+        if participant.get("status") == "Completed":
+            row["completed"] += 1
+    return result
+
+
+def _compute_platform_model_breakdown_from_participants(
+    participants: list[dict],
+) -> dict[str, dict[str, dict]]:
+    result: dict[str, dict[str, dict]] = {}
+    for participant in participants:
+        platform = str(participant.get("platform", "") or "").strip()
+        if not platform:
+            continue
+        model_tag = str(participant.get("model_tag", "") or "")
+        platform_rows = result.setdefault(platform, {})
+        row = platform_rows.setdefault(model_tag, {"total": 0, "completed": 0})
+        row["total"] += 1
+        if participant.get("status") == "Completed":
+            row["completed"] += 1
+    return result
+
+
+def _filter_selection_to_visible(
+    selected_ids: list[str],
+    visible_ids: list[str],
+) -> list[str]:
+    visible = set(visible_ids)
+    return [event_id for event_id in selected_ids if event_id in visible]
 
 
 class BreakdownModel(rx.Base):
@@ -180,6 +237,8 @@ class NexusState(rx.State):
 
     # BULK SELECTION
     selected_ids: list[str] = []
+    bulk_platform_value: str = ""
+    bulk_model_value: str = ""
 
     # MANUAL ADD PARTICIPANT
     show_add_participant: bool = False
@@ -347,14 +406,24 @@ class NexusState(rx.State):
         return [p for p in self.sorted_filtered_participants if p.get("status") == "Completed"]
 
     @rx.var(cache=True)
+    def participant_view_is_filtered(self) -> bool:
+        return bool(self.search_query or self.active_filter_count)
+
+    @rx.var(cache=True)
     def selection_count(self) -> int:
         return len(self.selected_ids)
 
     @rx.var(cache=True)
+    def selection_label(self) -> str:
+        suffix = " visible selected" if self.participant_view_is_filtered else " selected"
+        return str(self.selection_count) + suffix
+
+    @rx.var(cache=True)
     def all_selected(self) -> bool:
-        if not self.participants:
+        visible_count = len(self.sorted_filtered_participants)
+        if visible_count == 0:
             return False
-        return len(self.selected_ids) >= len(self.participants)
+        return len(self.selected_ids) >= visible_count
 
     @rx.var(cache=True)
     def campaign_name(self) -> str:
@@ -741,6 +810,134 @@ class NexusState(rx.State):
         if refresh_settings_view:
             await self.load_recent_admin_actions()
 
+    def _decorate_participants_for_ui(self, participants: list[dict]) -> list[dict]:
+        selected = set(self.selected_ids)
+        plain = _to_plain_python(participants) or []
+        out: list[dict] = []
+        for participant in plain:
+            row = dict(participant)
+            row.setdefault("_save_state", "")
+            row["_is_selected"] = row.get("google_event_id", "") in selected
+            out.append(row)
+        return out
+
+    def _visible_participant_ids(self) -> list[str]:
+        return [
+            participant.get("google_event_id", "")
+            for participant in self.sorted_filtered_participants
+            if participant.get("google_event_id", "")
+        ]
+
+    def _sync_selection_state(self) -> None:
+        self.selected_ids = _filter_selection_to_visible(
+            list(self.selected_ids),
+            self._visible_participant_ids(),
+        )
+        selected = set(self.selected_ids)
+        self.participants = [
+            {
+                **dict(participant),
+                "_is_selected": participant.get("google_event_id", "") in selected,
+            }
+            for participant in (_to_plain_python(self.participants) or [])
+        ]
+
+    def _refresh_loaded_participant_metrics(self) -> None:
+        participants = _to_plain_python(self.participants) or []
+        progress = _compute_campaign_progress_from_participants(participants)
+        self.per_device_stats = _compute_per_device_progress_from_participants(participants)
+        self.platform_model_breakdown = _compute_platform_model_breakdown_from_participants(
+            participants,
+        )
+        if self.current_campaign:
+            campaign = dict(self.current_campaign)
+            campaign["booked"] = progress["booked"]
+            campaign["completed_all"] = progress["completed"]
+            self.current_campaign = campaign
+
+    def _set_loaded_participants(
+        self,
+        participants: list[dict],
+        *,
+        preserve_selection: bool = True,
+    ) -> None:
+        previous_selection = list(self.selected_ids) if preserve_selection else []
+        self.participants = self._decorate_participants_for_ui(participants)
+        self.selected_ids = previous_selection
+        self._refresh_loaded_participant_metrics()
+        self._sync_selection_state()
+
+    def _clear_row_save_states(self) -> None:
+        self.participants = [
+            {**dict(participant), "_save_state": ""}
+            for participant in (_to_plain_python(self.participants) or [])
+        ]
+
+    def _set_row_save_state(self, event_ids: list[str], state: str) -> None:
+        ids = set(event_ids)
+        self.participants = [
+            {
+                **dict(participant),
+                "_save_state": (
+                    state if participant.get("google_event_id", "") in ids else ""
+                ),
+            }
+            for participant in (_to_plain_python(self.participants) or [])
+        ]
+
+    def _snapshot_participants(self) -> list[dict]:
+        return self._decorate_participants_for_ui(self.participants)
+
+    def _apply_participant_updates(self, event_ids: list[str], transform) -> None:
+        ids = set(event_ids)
+        updated: list[dict] = []
+        for participant in (_to_plain_python(self.participants) or []):
+            row = dict(participant)
+            if row.get("google_event_id", "") in ids:
+                row = transform(row)
+            updated.append(row)
+        self.participants = updated
+
+    async def _run_optimistic_participant_update(
+        self,
+        *,
+        event_ids: list[str],
+        apply_local,
+        persist,
+        refresh_metrics: bool = True,
+    ) -> bool:
+        if not event_ids:
+            return False
+        before_selected_ids = list(self.selected_ids)
+        self.detail_error = ""
+        self._clear_row_save_states()
+        before_participants = self._snapshot_participants()
+        apply_local()
+        self._set_row_save_state(event_ids, "saving")
+        if refresh_metrics:
+            self._refresh_loaded_participant_metrics()
+        self._sync_selection_state()
+
+        try:
+            await persist()
+        except Exception as exc:
+            self.participants = self._decorate_participants_for_ui(before_participants)
+            self.selected_ids = before_selected_ids
+            self._refresh_loaded_participant_metrics()
+            self._sync_selection_state()
+            self.detail_error = str(exc)
+            return False
+
+        if refresh_metrics:
+            try:
+                await self._check_auto_complete()
+            except Exception as exc:
+                self.detail_error = str(exc)
+
+        self._set_row_save_state(event_ids, "saved")
+        self._sync_selection_state()
+        return True
+
     def set_new_platform(self, v: str):
         self.new_platform = v
 
@@ -980,15 +1177,19 @@ class NexusState(rx.State):
 
     def set_filter_platform(self, v: str):
         self.filter_platform = v
+        self._sync_selection_state()
 
     def set_filter_status(self, v: str):
         self.filter_status = v
+        self._sync_selection_state()
 
     def set_filter_date(self, v: str):
         self.filter_date = v
+        self._sync_selection_state()
 
     def toggle_filter_has_issue(self):
         self.filter_has_issue = not self.filter_has_issue
+        self._sync_selection_state()
 
     def clear_all_filters(self):
         self.filter_platform = ""
@@ -996,6 +1197,7 @@ class NexusState(rx.State):
         self.filter_date = ""
         self.filter_has_issue = False
         self.search_query = ""
+        self._sync_selection_state()
 
     # DATE NAVIGATION
 
@@ -1018,10 +1220,8 @@ class NexusState(rx.State):
     async def _reload_participants(self):
         cid = self.active_campaign_id
         if cid:
-            self.participants = await get_participants_for_campaign(cid)
-            self.platform_model_breakdown = await get_platform_model_breakdown(cid)
-            self.selected_ids = []
-            # Auto-complete campaign when goal is reached
+            fresh = await get_participants_for_campaign(cid)
+            self._set_loaded_participants(fresh, preserve_selection=True)
             await self._check_auto_complete()
 
     async def _check_auto_complete(self):
@@ -1032,14 +1232,12 @@ class NexusState(rx.State):
         status = self.current_campaign.get("status", "active")
         if status == "completed":
             return
-        progress = await get_campaign_progress(cid)
         goal = int(self.current_campaign.get("goal", 100))
-        if goal > 0 and progress["completed"] >= goal:
+        completed = int(self.current_campaign.get("completed_all", 0))
+        if goal > 0 and completed >= goal:
             await db_update_campaign_field(cid, "status", "completed")
             camp = dict(self.current_campaign)
             camp["status"] = "completed"
-            camp["booked"] = progress["booked"]
-            camp["completed_all"] = progress["completed"]
             self.current_campaign = camp
 
     async def navigate_prev_day(self):
@@ -1085,6 +1283,8 @@ class NexusState(rx.State):
         self.detail_error = ""
         self.last_sync_time = ""
         self.range_sync_result = ""
+        self.bulk_platform_value = ""
+        self.bulk_model_value = ""
         self.show_delete_dialog = False
         self.show_delete_participant_dialog = False
         self.delete_participant_event_id = ""
@@ -1113,20 +1313,14 @@ class NexusState(rx.State):
             await self.load_settings()
             campaign = await get_campaign(cid)
             if campaign:
-                # Merge overall progress into the campaign dict
-                progress = await get_campaign_progress(cid)
-                campaign["booked"] = progress["booked"]
-                campaign["completed_all"] = progress["completed"]
                 self.current_campaign = campaign
-                self.participants = await get_participants_for_campaign(cid)
-                self.per_device_stats = await get_per_device_progress(cid)
-                breakdown = await get_platform_model_breakdown(cid)
-                self.platform_model_breakdown = breakdown
+                fresh = await get_participants_for_campaign(cid)
+                self._set_loaded_participants(fresh, preserve_selection=False)
                 self.device_breakdown_open = True
                 self.expanded_platform_panels = self._all_visible_platforms()
             else:
                 self.current_campaign = {}
-                self.participants = []
+                self.participants = self._decorate_participants_for_ui([])
                 self.per_device_stats = {}
                 self.platform_model_breakdown = {}
                 self.expanded_platform_panels = []
@@ -1148,38 +1342,79 @@ class NexusState(rx.State):
             self.selected_ids = [i for i in self.selected_ids if i != event_id]
         else:
             self.selected_ids = self.selected_ids + [event_id]
+        self._sync_selection_state()
 
     def select_all(self):
+        visible_ids = self._visible_participant_ids()
         if self.all_selected:
             self.selected_ids = []
         else:
-            self.selected_ids = [
-                p.get("google_event_id", "") for p in self.participants
-            ]
+            self.selected_ids = visible_ids
+        self._sync_selection_state()
 
     async def bulk_set_status(self, new_status: str):
         cid = self.active_campaign_id
         if cid and self.selected_ids:
-            await db_bulk_update_status(cid, list(self.selected_ids), new_status)
-            self.selected_ids = []
-            await self._reload_participants()
+            target_ids = list(self.selected_ids)
+            await self._run_optimistic_participant_update(
+                event_ids=target_ids,
+                apply_local=lambda: self._apply_participant_updates(
+                    target_ids,
+                    lambda participant: {
+                        **participant,
+                        "status": new_status,
+                        "end_time": (
+                            datetime.now().isoformat()
+                            if new_status == "Completed"
+                            else None
+                        ),
+                        "start_time": (
+                            None
+                            if new_status == "Booked"
+                            else participant.get("start_time")
+                        ),
+                    },
+                ),
+                persist=lambda: db_bulk_update_status(cid, target_ids, new_status),
+            )
 
-    async def bulk_set_platform(self, platform: str):
+    async def apply_bulk_platform(self):
         cid = self.active_campaign_id
-        if cid and self.selected_ids:
-            await db_bulk_update(cid, list(self.selected_ids), "platform", platform)
-            self.selected_ids = []
-            await self._reload_participants()
+        platform = self.bulk_platform_value
+        if cid and self.selected_ids and platform:
+            target_ids = list(self.selected_ids)
+            await self._run_optimistic_participant_update(
+                event_ids=target_ids,
+                apply_local=lambda: self._apply_participant_updates(
+                    target_ids,
+                    lambda participant: {**participant, "platform": platform},
+                ),
+                persist=lambda: db_bulk_update(cid, target_ids, "platform", platform),
+            )
+            self.bulk_platform_value = ""
 
-    async def bulk_set_model(self, model_tag: str):
+    async def apply_bulk_model(self):
         cid = self.active_campaign_id
-        if cid and self.selected_ids:
-            await db_bulk_update(cid, list(self.selected_ids), "model_tag", model_tag)
-            self.selected_ids = []
-            await self._reload_participants()
+        model_tag = self.bulk_model_value
+        if cid and self.selected_ids and model_tag:
+            target_ids = list(self.selected_ids)
+            await self._run_optimistic_participant_update(
+                event_ids=target_ids,
+                apply_local=lambda: self._apply_participant_updates(
+                    target_ids,
+                    lambda participant: {**participant, "model_tag": model_tag},
+                ),
+                persist=lambda: db_bulk_update(
+                    cid, target_ids, "model_tag", model_tag,
+                ),
+            )
+            self.bulk_model_value = ""
 
     def clear_selection(self):
         self.selected_ids = []
+        self.bulk_platform_value = ""
+        self.bulk_model_value = ""
+        self._sync_selection_state()
 
     def _all_visible_platforms(self) -> list[str]:
         """Compute the set of platforms visible in the breakdown panel."""
@@ -1220,9 +1455,10 @@ class NexusState(rx.State):
         await db_update_campaign_field(cid, "status", new_status)
         campaign = await get_campaign(cid)
         if campaign:
-            progress = await get_campaign_progress(cid)
-            campaign["booked"] = progress["booked"]
-            campaign["completed_all"] = progress["completed"]
+            campaign["booked"] = int(self.current_campaign.get("booked", 0))
+            campaign["completed_all"] = int(
+                self.current_campaign.get("completed_all", 0)
+            )
             self.current_campaign = campaign
             await self._log_admin_action(
                 action="update_campaign_status",
@@ -1250,14 +1486,9 @@ class NexusState(rx.State):
             from .backend.mongo_client import update_campaign_field as _ucf
             await _ucf(cid, "last_sync_at", datetime.now().isoformat())
             fresh = await get_participants_for_campaign(cid)
-            progress = await get_campaign_progress(cid)
-            breakdown = await get_platform_model_breakdown(cid)
             async with self:
-                self.participants = fresh
-                self.platform_model_breakdown = breakdown
+                self._set_loaded_participants(fresh, preserve_selection=True)
                 camp = dict(self.current_campaign)
-                camp["booked"] = progress["booked"]
-                camp["completed_all"] = progress["completed"]
                 camp["last_sync_at"] = datetime.now().isoformat()
                 self.current_campaign = camp
                 self.last_sync_time = datetime.now().strftime("%H:%M:%S")
@@ -1300,15 +1531,9 @@ class NexusState(rx.State):
             from .backend.mongo_client import update_campaign_field as _ucf
             await _ucf(cid, "last_sync_at", datetime.now().isoformat())
             fresh = await get_participants_for_campaign(cid)
-            # Refresh overall progress
-            progress = await get_campaign_progress(cid)
-            breakdown = await get_platform_model_breakdown(cid)
             async with self:
-                self.participants = fresh
-                self.platform_model_breakdown = breakdown
+                self._set_loaded_participants(fresh, preserve_selection=True)
                 camp = dict(self.current_campaign)
-                camp["booked"] = progress["booked"]
-                camp["completed_all"] = progress["completed"]
                 camp["last_sync_at"] = datetime.now().isoformat()
                 self.current_campaign = camp
                 self.range_sync_result = (
@@ -1347,10 +1572,8 @@ class NexusState(rx.State):
                     self.all_completed_count = counts["completed"]
                 if cid:
                     fresh = await get_participants_for_campaign(cid)
-                    breakdown = await get_platform_model_breakdown(cid)
                     async with self:
-                        self.participants = fresh
-                        self.platform_model_breakdown = breakdown
+                        self._set_loaded_participants(fresh, preserve_selection=True)
             except Exception:
                 pass
 
@@ -1359,41 +1582,80 @@ class NexusState(rx.State):
     async def set_platform(self, event_id: str, platform: str):
         cid = self.active_campaign_id
         if cid:
-            await db_update_field(cid, event_id, "platform", platform)
-            await self._reload_participants()
+            await self._run_optimistic_participant_update(
+                event_ids=[event_id],
+                apply_local=lambda: self._apply_participant_updates(
+                    [event_id],
+                    lambda participant: {**participant, "platform": platform},
+                ),
+                persist=lambda: db_update_field(cid, event_id, "platform", platform),
+            )
 
     async def set_model_tag(self, event_id: str, model_tag: str):
         cid = self.active_campaign_id
         if cid:
-            await db_update_field(cid, event_id, "model_tag", model_tag)
-            await self._reload_participants()
+            await self._run_optimistic_participant_update(
+                event_ids=[event_id],
+                apply_local=lambda: self._apply_participant_updates(
+                    [event_id],
+                    lambda participant: {**participant, "model_tag": model_tag},
+                ),
+                persist=lambda: db_update_field(
+                    cid, event_id, "model_tag", model_tag,
+                ),
+            )
 
     async def set_status(self, event_id: str, new_status: str):
         cid = self.active_campaign_id
         if cid:
-            await db_update_status(cid, event_id, new_status)
-            await self._reload_participants()
+            await self._run_optimistic_participant_update(
+                event_ids=[event_id],
+                apply_local=lambda: self._apply_participant_updates(
+                    [event_id],
+                    lambda participant: {
+                        **participant,
+                        "status": new_status,
+                        "end_time": (
+                            datetime.now().isoformat()
+                            if new_status == "Completed"
+                            else None
+                        ),
+                        "start_time": (
+                            None
+                            if new_status == "Booked"
+                            else participant.get("start_time")
+                        ),
+                    },
+                ),
+                persist=lambda: db_update_status(cid, event_id, new_status),
+            )
 
     async def toggle_completed(self, event_id: str):
         """Toggle a participant between Booked and Completed."""
         cid = self.active_campaign_id
         if not cid:
             return
+        new_status = "Completed"
         for p in self.participants:
             if p.get("google_event_id") == event_id:
-                new_status = "Booked" if p.get("status") == "Completed" else "Completed"
-                await db_update_status(cid, event_id, new_status)
+                new_status = (
+                    "Booked" if p.get("status") == "Completed" else "Completed"
+                )
                 break
-        await self._reload_participants()
+        await self.set_status(event_id, new_status)
 
     async def set_notes(self, event_id: str, notes: str):
         cid = self.active_campaign_id
         if cid:
-            await db_update_field(cid, event_id, "notes", notes)
-            self.participants = [
-                {**p, "notes": notes} if p.get("google_event_id") == event_id else p
-                for p in self.participants
-            ]
+            await self._run_optimistic_participant_update(
+                event_ids=[event_id],
+                apply_local=lambda: self._apply_participant_updates(
+                    [event_id],
+                    lambda participant: {**participant, "notes": notes},
+                ),
+                persist=lambda: db_update_field(cid, event_id, "notes", notes),
+                refresh_metrics=False,
+            )
 
     # EDIT PARTICIPANT
 
@@ -1423,17 +1685,52 @@ class NexusState(rx.State):
     def set_edit_participant_time(self, v: str):
         self.edit_participant_time = v
 
+    async def _persist_edit_participant(
+        self,
+        cid: str,
+        eid: str,
+        name: str,
+        email: str,
+        appointment_date: str,
+        appointment_time: str,
+    ) -> None:
+        await db_update_field(cid, eid, "name", name)
+        await db_update_field(cid, eid, "email", email)
+        await db_update_field(cid, eid, "appointment_date", appointment_date)
+        await db_update_field(cid, eid, "appointment_time", appointment_time)
+
     async def save_edit_participant(self):
         cid = self.active_campaign_id
         eid = self.edit_participant_eid
         if not cid or not eid:
             return
-        await db_update_field(cid, eid, "name", self.edit_participant_name.strip())
-        await db_update_field(cid, eid, "email", self.edit_participant_email.strip())
-        await db_update_field(cid, eid, "appointment_date", self.edit_participant_date.strip())
-        await db_update_field(cid, eid, "appointment_time", self.edit_participant_time.strip())
-        self.show_edit_participant = False
-        await self._reload_participants()
+        new_name = self.edit_participant_name.strip()
+        new_email = self.edit_participant_email.strip()
+        new_date = self.edit_participant_date.strip()
+        new_time = self.edit_participant_time.strip()
+        saved = await self._run_optimistic_participant_update(
+            event_ids=[eid],
+            apply_local=lambda: self._apply_participant_updates(
+                [eid],
+                lambda participant: {
+                    **participant,
+                    "name": new_name,
+                    "email": new_email,
+                    "appointment_date": new_date,
+                    "appointment_time": new_time,
+                },
+            ),
+            persist=lambda: self._persist_edit_participant(
+                cid, eid, new_name, new_email, new_date, new_time,
+            ),
+        )
+        if saved:
+            self.show_edit_participant = False
+            self.edit_participant_eid = ""
+            self.edit_participant_name = ""
+            self.edit_participant_email = ""
+            self.edit_participant_date = ""
+            self.edit_participant_time = ""
 
     # ISSUE TRACKING
 
@@ -1455,13 +1752,23 @@ class NexusState(rx.State):
         eid = self.editing_issue_event_id
         comment = self.editing_issue_comment.strip()
         if cid and eid:
-            await db_update_field(cid, eid, "issue_comment", comment)
-            self.participants = [
-                {**p, "issue_comment": comment} if p.get("google_event_id") == eid else p
-                for p in self.participants
-            ]
-        self.editing_issue_event_id = ""
-        self.editing_issue_comment = ""
+            saved = await self._run_optimistic_participant_update(
+                event_ids=[eid],
+                apply_local=lambda: self._apply_participant_updates(
+                    [eid],
+                    lambda participant: {
+                        **participant,
+                        "issue_comment": comment,
+                    },
+                ),
+                persist=lambda: db_update_field(
+                    cid, eid, "issue_comment", comment,
+                ),
+                refresh_metrics=False,
+            )
+            if saved:
+                self.editing_issue_event_id = ""
+                self.editing_issue_comment = ""
 
     def close_issue_editor(self):
         self.editing_issue_event_id = ""
@@ -1472,12 +1779,23 @@ class NexusState(rx.State):
         for p in self.participants:
             if p.get("google_event_id") == event_id:
                 if p.get("issue_comment", "").strip():
-                    # Clear the issue
-                    await db_update_field(self.active_campaign_id, event_id, "issue_comment", "")
-                    self.participants = [
-                        {**pp, "issue_comment": ""} if pp.get("google_event_id") == event_id else pp
-                        for pp in self.participants
-                    ]
+                    await self._run_optimistic_participant_update(
+                        event_ids=[event_id],
+                        apply_local=lambda: self._apply_participant_updates(
+                            [event_id],
+                            lambda participant: {
+                                **participant,
+                                "issue_comment": "",
+                            },
+                        ),
+                        persist=lambda: db_update_field(
+                            self.active_campaign_id,
+                            event_id,
+                            "issue_comment",
+                            "",
+                        ),
+                        refresh_metrics=False,
+                    )
                 else:
                     # Open editor
                     self.open_issue_editor(event_id)
@@ -1485,6 +1803,13 @@ class NexusState(rx.State):
 
     def set_search(self, query: str):
         self.search_query = query
+        self._sync_selection_state()
+
+    def set_bulk_platform_value(self, value: str):
+        self.bulk_platform_value = value
+
+    def set_bulk_model_value(self, value: str):
+        self.bulk_model_value = value
 
     # MANUAL PARTICIPANT ADD
 
