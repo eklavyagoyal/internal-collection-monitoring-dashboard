@@ -10,15 +10,21 @@ import pytest
 from datetime import datetime
 
 from nexus_track.state import (
+    _build_export_filename,
+    _build_range_sync_result_message,
+    _build_sync_result_message,
     _compute_campaign_progress_from_participants,
     _compute_per_device_progress_from_participants,
     _compute_platform_model_breakdown_from_participants,
     _count_issue_participants,
+    _dashboard_day_metric_label,
+    _display_date_label,
     _filter_selection_to_visible,
     _issue_filter_label,
     _issue_preview_text,
     _issue_summary_label,
     _participant_empty_state,
+    _participants_for_scope,
 )
 
 
@@ -82,17 +88,7 @@ class _MockState:
 
     @property
     def display_date_label(self) -> str:
-        d = self.selected_date
-        today = datetime.now().date()
-        if not d:
-            label = today.strftime("%A, %B %d")
-            return f"{label} · Today"
-        try:
-            dt = datetime.strptime(d, "%Y-%m-%d").date()
-        except ValueError:
-            return d
-        label = dt.strftime("%A, %B %d")
-        return f"{label} · Today" if dt == today else label
+        return _display_date_label(self.selected_date or datetime.now().strftime("%Y-%m-%d"))
 
     @property
     def campaign_last_sync(self) -> str:
@@ -310,6 +306,34 @@ class TestSelectionScopeHelpers:
             "evt-2",
         ]
 
+    def test_participants_for_scope_limits_selected_day_only(self):
+        participants = [
+            {"google_event_id": "evt-1", "appointment_date": "2026-03-23"},
+            {"google_event_id": "evt-2", "appointment_date": "2026-03-24"},
+        ]
+
+        scoped = _participants_for_scope(
+            participants,
+            "selected_day",
+            "2026-03-23",
+        )
+
+        assert scoped == [{"google_event_id": "evt-1", "appointment_date": "2026-03-23"}]
+
+    def test_participants_for_scope_keeps_all_dates_mode(self):
+        participants = [
+            {"google_event_id": "evt-1", "appointment_date": "2026-03-23"},
+            {"google_event_id": "evt-2", "appointment_date": "2026-03-24"},
+        ]
+
+        scoped = _participants_for_scope(
+            participants,
+            "all_dates",
+            "2026-03-23",
+        )
+
+        assert scoped == participants
+
 
 class TestIssueHelpers:
     def test_count_issue_participants_ignores_blank_comments(self):
@@ -362,6 +386,7 @@ class TestIssueHelpers:
             visible_participants=0,
             total_issues=3,
             filter_has_issue=True,
+            participant_scope_mode="all_dates",
         )
 
         assert title == "No issues match the current view"
@@ -373,7 +398,51 @@ class TestIssueHelpers:
             visible_participants=0,
             total_issues=0,
             filter_has_issue=True,
+            participant_scope_mode="all_dates",
         )
 
         assert title == "No flagged issues yet"
         assert "Flag an issue" in description
+
+    def test_participant_empty_state_handles_selected_day_scope(self):
+        title, description = _participant_empty_state(
+            total_participants=8,
+            visible_participants=0,
+            total_issues=0,
+            filter_has_issue=False,
+            participant_scope_mode="selected_day",
+        )
+
+        assert title == "No participants on the selected day"
+        assert "switch to All dates" in description or "Switch to All dates" in description
+
+
+class TestScopeMessagingHelpers:
+    def test_dashboard_day_metric_label_uses_day_for_non_today(self):
+        assert _dashboard_day_metric_label("1999-01-01") == "Day"
+
+    def test_build_sync_result_message_includes_absolute_date(self):
+        message = _build_sync_result_message(3, "2026-03-23")
+
+        assert message == "Synced 3 events for Monday, March 23, 2026."
+
+    def test_build_range_sync_result_message_includes_range(self):
+        message = _build_range_sync_result_message(
+            5,
+            2,
+            "2026-03-23",
+            "2026-03-24",
+        )
+
+        assert "Monday, March 23, 2026" in message
+        assert "Tuesday, March 24, 2026" in message
+        assert "5 events" in message
+
+    def test_build_export_filename_includes_scope_and_date_when_needed(self):
+        filename = _build_export_filename(
+            "Internal Collection Dashboard",
+            "current_filters_selected_day",
+            "2026-03-23",
+        )
+
+        assert filename == "internal_collection_dashboard_current_filters_selected_day_2026-03-23.csv"

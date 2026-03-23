@@ -2,6 +2,7 @@
 
 import reflex as rx
 
+from ..state import NexusState
 from .design_tokens import (
     ACCENT,
     ACCENT_GRADIENT_H,
@@ -134,7 +135,7 @@ def campaign_card(campaign: dict) -> rx.Component:
                 rx.hstack(
                     rx.center(
                         rx.text(
-                            "Today: ", today_completed, "/", today_total,
+                            NexusState.dashboard_day_metric_label, ": ", today_completed, "/", today_total,
                             size="1", weight="medium", color=ACCENT,
                         ),
                         padding="2px 8px",

@@ -313,6 +313,29 @@ class TestExportCSV:
         assert len(rows) == 1
         assert rows[0]["issue_comment"] == "Had issue"
 
+    @pytest.mark.asyncio
+    async def test_export_can_be_limited_to_selected_date(self):
+        cid = await mc.create_campaign({"name": "Export2"})
+        await mc.upsert_participant(cid, "ex-2a", "A", "a@t.com", "10:00", "2024-06-15")
+        await mc.upsert_participant(cid, "ex-2b", "B", "b@t.com", "11:00", "2024-06-16")
+
+        rows = await mc.get_participants_for_export(cid, "2024-06-15")
+
+        assert len(rows) == 1
+        assert rows[0]["date"] == "2024-06-15"
+        assert rows[0]["name"] == "A"
+
+    @pytest.mark.asyncio
+    async def test_export_rows_are_sorted_by_date_then_time(self):
+        cid = await mc.create_campaign({"name": "Export3"})
+        await mc.upsert_participant(cid, "ex-3b", "Later", "later@t.com", "12:00", "2024-06-15")
+        await mc.upsert_participant(cid, "ex-3a", "Earlier", "earlier@t.com", "09:00", "2024-06-15")
+        await mc.upsert_participant(cid, "ex-3c", "NextDay", "next@t.com", "08:00", "2024-06-16")
+
+        rows = await mc.get_participants_for_export(cid)
+
+        assert [row["name"] for row in rows] == ["Earlier", "Later", "NextDay"]
+
 
 class TestAdminPinSecurity:
     @pytest.mark.asyncio

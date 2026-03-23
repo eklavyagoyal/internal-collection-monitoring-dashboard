@@ -78,6 +78,74 @@ def _campaign_cta(primary_label: str) -> rx.Component:
     )
 
 
+def _dashboard_date_bar() -> rx.Component:
+    return glass_card(
+        rx.flex(
+            rx.vstack(
+                rx.hstack(
+                    rx.icon("calendar-days", size=16, color=ACCENT),
+                    rx.text("Dashboard Day", size="2", weight="bold", color=HEADING),
+                    spacing="2",
+                    align="center",
+                ),
+                rx.heading(
+                    NexusState.display_date_label,
+                    size="5",
+                    weight="bold",
+                    color=HEADING,
+                ),
+                rx.text(
+                    NexusState.dashboard_date_context_note,
+                    size="1",
+                    color=SUBTEXT,
+                    max_width="520px",
+                    line_height="1.5",
+                ),
+                spacing="2",
+                align="start",
+            ),
+            rx.hstack(
+                rx.button(
+                    "Previous",
+                    size="1",
+                    variant="soft",
+                    color_scheme="gray",
+                    border_radius=RADIUS_SM,
+                    on_click=NexusState.dashboard_prev_day,
+                    cursor="pointer",
+                ),
+                rx.button(
+                    "Today",
+                    size="1",
+                    variant=rx.cond(NexusState.is_today, "solid", "soft"),
+                    color_scheme="iris",
+                    border_radius=RADIUS_SM,
+                    on_click=NexusState.dashboard_today,
+                    cursor="pointer",
+                ),
+                rx.button(
+                    "Next",
+                    size="1",
+                    variant="soft",
+                    color_scheme="gray",
+                    border_radius=RADIUS_SM,
+                    on_click=NexusState.dashboard_next_day,
+                    cursor="pointer",
+                ),
+                spacing="2",
+                align="center",
+                flex_wrap="wrap",
+            ),
+            direction=rx.breakpoints(initial="column", md="row"),
+            justify="between",
+            align=rx.breakpoints(initial="start", md="center"),
+            gap="4",
+            width="100%",
+        ),
+        margin_bottom="16px",
+    )
+
+
 # -- Empty state
 def _empty_state() -> rx.Component:
     return rx.center(
@@ -175,6 +243,7 @@ def dashboard_page() -> rx.Component:
                 gap="4",
                 width="100%",
             ),
+            _dashboard_date_bar(),
             # -- Stat row
             rx.grid(
                 stat_card(

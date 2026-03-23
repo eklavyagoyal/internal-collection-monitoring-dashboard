@@ -183,6 +183,7 @@ def _participant_empty_state(
     visible_participants: int,
     total_issues: int,
     filter_has_issue: bool,
+    participant_scope_mode: str,
 ) -> tuple[str, str]:
     if visible_participants > 0:
         return "", ""
@@ -196,12 +197,145 @@ def _participant_empty_state(
             "No issues match the current view",
             "Clear search or other filters to bring flagged participants back into view.",
         )
+    if total_participants > 0 and participant_scope_mode == "selected_day":
+        return (
+            "No participants on the selected day",
+            "Choose another day or switch to All dates to widen the participant view.",
+        )
     if total_participants > 0:
         return (
             "No participants match the current view",
             "Adjust search or filters to bring participants back into view.",
         )
     return "No participants yet", "Sync a calendar or add participants manually."
+
+
+def _participants_for_scope(
+    participants: list[dict],
+    scope_mode: str,
+    selected_date: str,
+) -> list[dict]:
+    if scope_mode != "selected_day":
+        return list(participants)
+    return [
+        participant
+        for participant in participants
+        if participant.get("appointment_date", "") == selected_date
+    ]
+
+
+def _absolute_date_label(date_str: str) -> str:
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        return dt.strftime("%A, %B %d, %Y")
+    except Exception:
+        return date_str
+
+
+def _display_date_label(date_str: str) -> str:
+    today = datetime.now().date()
+    base_date = date_str or today.strftime("%Y-%m-%d")
+    label = _absolute_date_label(base_date)
+    try:
+        delta = (datetime.strptime(base_date, "%Y-%m-%d").date() - today).days
+    except Exception:
+        return label
+
+    suffix = ""
+    if delta == 0:
+        suffix = " · Today"
+    elif delta == -1:
+        suffix = " · Yesterday"
+    elif delta == 1:
+        suffix = " · Tomorrow"
+    return label + suffix
+
+
+def _compact_date_label(date_str: str) -> str:
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        return dt.strftime("%b %d")
+    except Exception:
+        return date_str
+
+
+def _dashboard_day_metric_label(selected_date: str) -> str:
+    if selected_date == datetime.now().strftime("%Y-%m-%d"):
+        return "Today"
+    return "Day"
+
+
+def _build_sync_result_message(count: int, selected_date: str) -> str:
+    event_word = "event" if count == 1 else "events"
+    return (
+        f"Synced {count} {event_word} for {_absolute_date_label(selected_date)}."
+    )
+
+
+def _build_range_sync_result_message(
+    synced: int,
+    days: int,
+    start_date: str,
+    end_date: str,
+) -> str:
+    event_word = "event" if synced == 1 else "events"
+    day_word = "day" if days == 1 else "days"
+    return (
+        f"Synced {synced} {event_word} from "
+        f"{_absolute_date_label(start_date)} to {_absolute_date_label(end_date)} "
+        f"across {days} {day_word}."
+    )
+
+
+def _sanitize_filename_fragment(value: str) -> str:
+    cleaned = [
+        char.lower()
+        if char.isalnum()
+        else "_"
+        for char in str(value or "").strip()
+    ]
+    compact = "".join(cleaned).strip("_")
+    while "__" in compact:
+        compact = compact.replace("__", "_")
+    return compact or "export"
+
+
+def _build_export_filename(
+    campaign_name: str,
+    scope_key: str,
+    selected_date: str,
+) -> str:
+    name = _sanitize_filename_fragment(campaign_name)
+    suffix = _sanitize_filename_fragment(scope_key)
+    if "selected_day" in scope_key:
+        return f"{name}_{suffix}_{selected_date}.csv"
+    return f"{name}_{suffix}.csv"
+
+
+def _build_export_result_message(
+    filename: str,
+    row_count: int,
+    scope_label: str,
+) -> str:
+    row_word = "row" if row_count == 1 else "rows"
+    return f"Prepared {filename} for {scope_label} ({row_count} {row_word})."
+
+
+def _rows_for_export(participants: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    for participant in participants:
+        rows.append({
+            "name": participant.get("name", ""),
+            "email": participant.get("email", ""),
+            "date": participant.get("appointment_date", ""),
+            "time": participant.get("appointment_time", ""),
+            "platform": participant.get("platform", ""),
+            "model_tag": participant.get("model_tag", ""),
+            "status": participant.get("status", ""),
+            "notes": participant.get("notes", ""),
+            "issue_comment": participant.get("issue_comment", ""),
+        })
+    return rows
 
 
 class BreakdownModel(rx.Base):
@@ -287,6 +421,7 @@ class NexusState(rx.State):
     per_device_stats: dict = {}
     platform_model_breakdown: dict = {}
     platform_model_tags: dict = {}
+    participant_scope_mode: str = "selected_day"
     expanded_platform_panels: list[str] = []
     device_breakdown_open: bool = False
 
@@ -318,7 +453,8 @@ class NexusState(rx.State):
 
     # SYNC
     is_syncing: bool = False
-    last_sync_time: str = ""
+    last_sync_result: str = ""
+    last_export_result: str = ""
     sync_error: str = ""
     detail_error: str = ""
 
@@ -378,14 +514,34 @@ class NexusState(rx.State):
         return len(self.participants)
 
     @rx.var(cache=True)
+    def selected_day_participants(self) -> list[dict]:
+        return _participants_for_scope(
+            self.participants,
+            "selected_day",
+            self.selected_date_iso,
+        )
+
+    @rx.var(cache=True)
+    def scoped_participants(self) -> list[dict]:
+        return _participants_for_scope(
+            self.participants,
+            self.participant_scope_mode,
+            self.selected_date_iso,
+        )
+
+    @rx.var(cache=True)
+    def scoped_total_count(self) -> int:
+        return len(self.scoped_participants)
+
+    @rx.var(cache=True)
     def completed_count(self) -> int:
-        return sum(1 for p in self.participants if p.get("status") == "Completed")
+        return sum(1 for p in self.scoped_participants if p.get("status") == "Completed")
 
     @rx.var(cache=True)
     def avg_session_minutes(self) -> int:
         """Mean duration (minutes) of completed sessions with timestamps."""
         durations = []
-        for p in self.participants:
+        for p in self.scoped_participants:
             st, et = p.get("start_time"), p.get("end_time")
             if st and et:
                 try:
@@ -401,6 +557,8 @@ class NexusState(rx.State):
     @rx.var(cache=True)
     def eta_finish_today(self) -> str:
         """Estimated finish time based on avg session duration and remaining bookings."""
+        if self.participant_scope_mode != "selected_day":
+            return ""
         avg = self.avg_session_minutes
         if avg <= 0:
             return ""
@@ -412,16 +570,16 @@ class NexusState(rx.State):
 
     @rx.var(cache=True)
     def booked_count(self) -> int:
-        return sum(1 for p in self.participants if p.get("status") != "Completed")
+        return sum(1 for p in self.scoped_participants if p.get("status") != "Completed")
 
     @rx.var(cache=True)
     def progress_pct(self) -> int:
-        t = self.total_count
+        t = self.scoped_total_count
         return int(self.completed_count / t * 100) if t else 0
 
     @rx.var(cache=True)
     def sorted_filtered_participants(self) -> list[dict]:
-        items = self.participants
+        items = self.scoped_participants
 
         # Text search
         if self.search_query:
@@ -492,6 +650,90 @@ class NexusState(rx.State):
         )
 
     @rx.var(cache=True)
+    def selected_day_participant_count(self) -> int:
+        return len(self.selected_day_participants)
+
+    @rx.var(cache=True)
+    def current_filters_export_count(self) -> int:
+        return len(self.sorted_filtered_participants)
+
+    @rx.var(cache=True)
+    def participant_scope_label(self) -> str:
+        if self.participant_scope_mode == "selected_day":
+            return "Selected day only"
+        return "All dates"
+
+    @rx.var(cache=True)
+    def participant_scope_description(self) -> str:
+        if self.participant_scope_mode == "selected_day":
+            return (
+                "Participant list, bulk actions, and Current filters export are "
+                f"locked to {self.display_date_label}."
+            )
+        return (
+            "Participant list, bulk actions, and Current filters export span all dates. "
+            f"The selected day still powers one-day sync and Selected day export for {self.display_date_label}."
+        )
+
+    @rx.var(cache=True)
+    def participant_scope_hint(self) -> str:
+        if self.participant_scope_mode == "selected_day":
+            return "Date locked to " + self.display_date_label
+        return "Selected day for one-day actions: " + self.display_date_label
+
+    @rx.var(cache=True)
+    def show_date_filter(self) -> bool:
+        return self.participant_scope_mode == "all_dates"
+
+    @rx.var(cache=True)
+    def selected_date_short_label(self) -> str:
+        return _compact_date_label(self.selected_date_iso)
+
+    @rx.var(cache=True)
+    def sync_selected_day_button_label(self) -> str:
+        return "Sync selected day · " + self.selected_date_short_label
+
+    @rx.var(cache=True)
+    def current_filters_export_button_label(self) -> str:
+        return "Current filters (" + str(self.current_filters_export_count) + ")"
+
+    @rx.var(cache=True)
+    def selected_day_export_button_label(self) -> str:
+        return (
+            "Selected day · "
+            + self.selected_date_short_label
+            + " ("
+            + str(self.selected_day_participant_count)
+            + ")"
+        )
+
+    @rx.var(cache=True)
+    def all_dates_export_button_label(self) -> str:
+        return "All dates (" + str(self.total_count) + ")"
+
+    @rx.var(cache=True)
+    def dashboard_day_metric_label(self) -> str:
+        return _dashboard_day_metric_label(self.selected_date_iso)
+
+    @rx.var(cache=True)
+    def dashboard_date_context_note(self) -> str:
+        return (
+            "Daily counts on campaign cards use "
+            + self.display_date_label
+            + ". Goal progress still stays all dates."
+        )
+
+    @rx.var(cache=True)
+    def scoped_platform_model_breakdown(self) -> dict[str, dict[str, dict]]:
+        return _compute_platform_model_breakdown_from_participants(
+            self.scoped_participants,
+        )
+
+    @rx.var(cache=True)
+    def device_breakdown_scope_label(self) -> str:
+        return self.participant_scope_label
+
+    @rx.var(cache=True)
     def total_issue_count(self) -> int:
         return _count_issue_participants(self.participants)
 
@@ -522,6 +764,7 @@ class NexusState(rx.State):
             visible_participants=self.visible_total_count,
             total_issues=self.total_issue_count,
             filter_has_issue=self.filter_has_issue,
+            participant_scope_mode=self.participant_scope_mode,
         )
         return title
 
@@ -532,12 +775,17 @@ class NexusState(rx.State):
             visible_participants=self.visible_total_count,
             total_issues=self.total_issue_count,
             filter_has_issue=self.filter_has_issue,
+            participant_scope_mode=self.participant_scope_mode,
         )
         return description
 
     @rx.var(cache=True)
     def participant_view_is_filtered(self) -> bool:
-        return bool(self.search_query or self.active_filter_count)
+        return bool(
+            self.search_query
+            or self.active_filter_count
+            or self.participant_scope_mode == "selected_day"
+        )
 
     @rx.var(cache=True)
     def selection_count(self) -> int:
@@ -686,7 +934,7 @@ class NexusState(rx.State):
     @rx.var(cache=True)
     def platform_breakdown_for_render(self) -> list[BreakdownPlatform]:
         """List of platform items with typed nested model lists for rendering."""
-        breakdown = self.platform_model_breakdown  # {platform: {model: {total, completed}}}
+        breakdown = self.scoped_platform_model_breakdown  # {platform: {model: {total, completed}}}
         config = self.platform_model_tags           # {platform: [model_tags]}
         expanded = set(self.expanded_platform_panels)
 
@@ -821,21 +1069,7 @@ class NexusState(rx.State):
 
     @rx.var(cache=True)
     def display_date_label(self) -> str:
-        d = self.selected_date
-        today = datetime.now().date()
-        if not d:
-            return datetime.now().strftime("%A, %B %d")
-        try:
-            dt = datetime.strptime(d, "%Y-%m-%d")
-            delta = (dt.date() - today).days
-            suffix = ""
-            if delta == -1:
-                suffix = "  \u00b7  Yesterday"
-            elif delta == 1:
-                suffix = "  \u00b7  Tomorrow"
-            return dt.strftime("%A, %B %d") + suffix
-        except Exception:
-            return d
+        return _display_date_label(self.selected_date_iso)
 
     @rx.var(cache=True)
     def is_today(self) -> bool:
@@ -1097,6 +1331,9 @@ class NexusState(rx.State):
         self._sync_selection_state()
         return True
 
+    def _clear_export_feedback(self) -> None:
+        self.last_export_result = ""
+
     def set_new_platform(self, v: str):
         self.new_platform = v
 
@@ -1337,18 +1574,22 @@ class NexusState(rx.State):
     def set_filter_platform(self, v: str):
         self.filter_platform = v
         self._sync_selection_state()
+        self._clear_export_feedback()
 
     def set_filter_status(self, v: str):
         self.filter_status = v
         self._sync_selection_state()
+        self._clear_export_feedback()
 
     def set_filter_date(self, v: str):
         self.filter_date = v
         self._sync_selection_state()
+        self._clear_export_feedback()
 
     def toggle_filter_has_issue(self):
         self.filter_has_issue = not self.filter_has_issue
         self._sync_selection_state()
+        self._clear_export_feedback()
 
     def clear_all_filters(self):
         self.filter_platform = ""
@@ -1357,24 +1598,42 @@ class NexusState(rx.State):
         self.filter_has_issue = False
         self.search_query = ""
         self._sync_selection_state()
+        self._clear_export_feedback()
+
+    def set_participant_scope_mode(self, mode: str):
+        if mode not in ("selected_day", "all_dates"):
+            return
+        self.participant_scope_mode = mode
+        if mode == "selected_day":
+            self.filter_date = ""
+        self._sync_selection_state()
+        self._clear_export_feedback()
 
     # DATE NAVIGATION
 
     def go_to_today(self):
         self.selected_date = ""
+        self._sync_selection_state()
+        self._clear_export_feedback()
 
     def go_prev_day(self):
         d = self._get_date()
         prev = datetime.strptime(d, "%Y-%m-%d") - timedelta(days=1)
         self.selected_date = prev.strftime("%Y-%m-%d")
+        self._sync_selection_state()
+        self._clear_export_feedback()
 
     def go_next_day(self):
         d = self._get_date()
         nxt = datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1)
         self.selected_date = nxt.strftime("%Y-%m-%d")
+        self._sync_selection_state()
+        self._clear_export_feedback()
 
     def set_date(self, date_str: str):
         self.selected_date = date_str
+        self._sync_selection_state()
+        self._clear_export_feedback()
 
     async def _reload_participants(self):
         cid = self.active_campaign_id
@@ -1408,6 +1667,18 @@ class NexusState(rx.State):
     async def navigate_to_today(self):
         self.go_to_today()
 
+    async def dashboard_prev_day(self):
+        self.go_prev_day()
+        await self.load_campaigns()
+
+    async def dashboard_next_day(self):
+        self.go_next_day()
+        await self.load_campaigns()
+
+    async def dashboard_today(self):
+        self.go_to_today()
+        await self.load_campaigns()
+
     # DASHBOARD
 
     async def load_campaigns(self):
@@ -1440,10 +1711,12 @@ class NexusState(rx.State):
         self.search_query = ""
         self.sync_error = ""
         self.detail_error = ""
-        self.last_sync_time = ""
+        self.last_sync_result = ""
+        self.last_export_result = ""
         self.range_sync_result = ""
         self.bulk_platform_value = ""
         self.bulk_model_value = ""
+        self.participant_scope_mode = "selected_day"
         self.show_delete_dialog = False
         self.show_delete_participant_dialog = False
         self.delete_participant_event_id = ""
@@ -1468,6 +1741,8 @@ class NexusState(rx.State):
         self.filter_has_issue = False
         if not self.selected_date:
             self.selected_date = datetime.now().strftime("%Y-%m-%d")
+        self.sync_start_date = self.selected_date_iso
+        self.sync_end_date = self.selected_date_iso
         if cid:
             await self.load_settings()
             campaign = await get_campaign(cid)
@@ -1578,7 +1853,7 @@ class NexusState(rx.State):
     def _all_visible_platforms(self) -> list[str]:
         """Compute the set of platforms visible in the breakdown panel."""
         all_platforms = sorted(
-            set(self.platform_model_breakdown.keys()) | set(self.platform_model_tags.keys())
+            set(self.scoped_platform_model_breakdown.keys()) | set(self.platform_model_tags.keys())
         )
         campaign_platforms = set(self.current_campaign.get("device_types", []))
         if campaign_platforms:
@@ -1634,9 +1909,10 @@ class NexusState(rx.State):
         async with self:
             self.is_syncing = True
             self.sync_error = ""
+            self.last_sync_result = ""
             campaign = dict(self.current_campaign)
             cid = self.active_campaign_id
-            date = self.selected_date or datetime.now().strftime("%Y-%m-%d")
+            date = self.selected_date_iso
         try:
             if not campaign:
                 raise ValueError("No campaign loaded")
@@ -1650,7 +1926,7 @@ class NexusState(rx.State):
                 camp = dict(self.current_campaign)
                 camp["last_sync_at"] = datetime.now().isoformat()
                 self.current_campaign = camp
-                self.last_sync_time = datetime.now().strftime("%H:%M:%S")
+                self.last_sync_result = _build_sync_result_message(count, date)
                 self.is_syncing = False
         except Exception as exc:
             log.exception("Calendar sync failed")
@@ -1662,9 +1938,11 @@ class NexusState(rx.State):
 
     def set_sync_start_date(self, v: str):
         self.sync_start_date = v
+        self.range_sync_result = ""
 
     def set_sync_end_date(self, v: str):
         self.sync_end_date = v
+        self.range_sync_result = ""
 
     @rx.event(background=True)
     async def sync_campaign_range(self):
@@ -1695,8 +1973,11 @@ class NexusState(rx.State):
                 camp = dict(self.current_campaign)
                 camp["last_sync_at"] = datetime.now().isoformat()
                 self.current_campaign = camp
-                self.range_sync_result = (
-                    f"Synced {result['synced']} events across {result['days']} days"
+                self.range_sync_result = _build_range_sync_result_message(
+                    result["synced"],
+                    result["days"],
+                    start,
+                    end,
                 )
                 self.is_syncing = False
         except Exception as exc:
@@ -1972,6 +2253,7 @@ class NexusState(rx.State):
     def set_search(self, query: str):
         self.search_query = query
         self._sync_selection_state()
+        self._clear_export_feedback()
 
     def set_bulk_platform_value(self, value: str):
         self.bulk_platform_value = value
@@ -1985,7 +2267,7 @@ class NexusState(rx.State):
         self.show_add_participant = not self.show_add_participant
         self.add_name = ""
         self.add_email = ""
-        self.add_date = datetime.now().strftime("%Y-%m-%d")
+        self.add_date = self.selected_date_iso
         self.add_time = ""
 
     def set_add_name(self, v: str):
@@ -2023,13 +2305,7 @@ class NexusState(rx.State):
 
     # CSV EXPORT
 
-    async def export_csv(self):
-        cid = self.active_campaign_id
-        if not cid:
-            return
-        rows = await get_participants_for_export(cid)
-        if not rows:
-            return
+    def _csv_download(self, rows: list[dict], filename: str):
         buf = io.StringIO()
         writer = csv.DictWriter(
             buf,
@@ -2037,10 +2313,65 @@ class NexusState(rx.State):
         )
         writer.writeheader()
         writer.writerows(rows)
-        csv_str = buf.getvalue()
-        campaign_name = self.current_campaign.get("name", "export").replace(" ", "_")
-        filename = f"{campaign_name}_all.csv"
-        return rx.download(data=csv_str, filename=filename)
+        return rx.download(data=buf.getvalue(), filename=filename)
+
+    def _finish_export(
+        self,
+        *,
+        rows: list[dict],
+        scope_key: str,
+        scope_label: str,
+    ):
+        if not rows:
+            self.last_export_result = f"No rows to export for {scope_label}."
+            return
+        filename = _build_export_filename(
+            self.current_campaign.get("name", "export"),
+            scope_key,
+            self.selected_date_iso,
+        )
+        self.last_export_result = _build_export_result_message(
+            filename,
+            len(rows),
+            scope_label,
+        )
+        return self._csv_download(rows, filename)
+
+    async def export_current_filters_csv(self):
+        rows = _rows_for_export(_to_plain_python(self.sorted_filtered_participants) or [])
+        if self.participant_scope_mode == "selected_day":
+            scope_key = "current_filters_selected_day"
+            scope_label = "current filters for " + _absolute_date_label(self.selected_date_iso)
+        else:
+            scope_key = "current_filters_all_dates"
+            scope_label = "current filters across all dates"
+        return self._finish_export(
+            rows=rows,
+            scope_key=scope_key,
+            scope_label=scope_label,
+        )
+
+    async def export_selected_day_csv(self):
+        cid = self.active_campaign_id
+        if not cid:
+            return
+        rows = await get_participants_for_export(cid, self.selected_date_iso)
+        return self._finish_export(
+            rows=rows,
+            scope_key="selected_day",
+            scope_label="the selected day " + _absolute_date_label(self.selected_date_iso),
+        )
+
+    async def export_all_dates_csv(self):
+        cid = self.active_campaign_id
+        if not cid:
+            return
+        rows = await get_participants_for_export(cid)
+        return self._finish_export(
+            rows=rows,
+            scope_key="all_dates",
+            scope_label="all dates",
+        )
 
     # DELETE CAMPAIGN
 

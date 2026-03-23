@@ -659,7 +659,8 @@ async def get_participants_for_export(
     query: dict = {"campaign_id": campaign_id}
     if date:
         query["appointment_date"] = date
-    cursor = _participants().find(query).sort("appointment_date", 1)
+    sort_key = [("appointment_date", 1), ("appointment_time", 1)]
+    cursor = _participants().find(query).sort(sort_key)
     out: list[dict] = []
     async for doc in cursor:
         out.append({

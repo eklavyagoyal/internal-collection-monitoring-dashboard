@@ -505,6 +505,12 @@ def _platform_breakdown_panel() -> rx.Component:
                 ),
                 rx.icon("monitor-smartphone", size=14, color=ACCENT),
                 rx.text("Device & Model Breakdown", size="2", weight="bold", color=HEADING),
+                rx.badge(
+                    NexusState.device_breakdown_scope_label,
+                    color_scheme="iris",
+                    size="1",
+                    variant="soft",
+                ),
                 spacing="2",
                 align="center",
                 cursor="pointer",
@@ -545,7 +551,7 @@ def _stats_and_progress() -> rx.Component:
             _stat_pill("Done", NexusState.campaign_completed_all, GREEN, GREEN_SOFT),
             rx.spacer(),
             rx.text(
-                NexusState.campaign_booked.to(str) + " total",
+                NexusState.campaign_booked.to(str) + " unique participants",
                 size="2",
                 weight="medium",
                 color=SUBTEXT,
@@ -554,6 +560,24 @@ def _stats_and_progress() -> rx.Component:
             align="center",
             width="100%",
             flex_wrap="wrap",
+        ),
+        rx.hstack(
+            rx.badge(
+                "Campaign progress: all dates",
+                color_scheme="blue",
+                size="1",
+                variant="soft",
+            ),
+            rx.badge(
+                "Breakdown: " + NexusState.device_breakdown_scope_label,
+                color_scheme="iris",
+                size="1",
+                variant="soft",
+            ),
+            spacing="2",
+            align="center",
+            flex_wrap="wrap",
+            width="100%",
         ),
         # Per-device progress panel
         _platform_breakdown_panel(),
@@ -575,6 +599,107 @@ def _stats_and_progress() -> rx.Component:
         spacing="3",
         width="100%",
         margin_bottom="16px",
+    )
+
+
+# -----------------------------------------------------------------------
+# Date scope bar
+# -----------------------------------------------------------------------
+
+def _date_scope_bar() -> rx.Component:
+    return glass_card(
+        rx.flex(
+            rx.vstack(
+                rx.hstack(
+                    rx.icon("calendar-days", size=16, color=ACCENT),
+                    rx.text("Participant Date Context", size="2", weight="bold", color=HEADING),
+                    spacing="2",
+                    align="center",
+                ),
+                rx.heading(
+                    NexusState.display_date_label,
+                    size="5",
+                    color=HEADING,
+                ),
+                rx.text(
+                    "Campaign goal progress below stays all dates. "
+                    "The participant table, bulk actions, and Current filters export use the scope shown here.",
+                    size="1",
+                    color=SUBTEXT,
+                    max_width="520px",
+                    line_height="1.5",
+                ),
+                spacing="2",
+                align="start",
+            ),
+            rx.vstack(
+                rx.hstack(
+                    rx.button(
+                        "Previous",
+                        size="1",
+                        variant="soft",
+                        color_scheme="gray",
+                        border_radius=RADIUS_SM,
+                        on_click=NexusState.go_prev_day,
+                        cursor="pointer",
+                    ),
+                    rx.button(
+                        "Today",
+                        size="1",
+                        variant=rx.cond(NexusState.is_today, "solid", "soft"),
+                        color_scheme="iris",
+                        border_radius=RADIUS_SM,
+                        on_click=NexusState.go_to_today,
+                        cursor="pointer",
+                    ),
+                    rx.button(
+                        "Next",
+                        size="1",
+                        variant="soft",
+                        color_scheme="gray",
+                        border_radius=RADIUS_SM,
+                        on_click=NexusState.go_next_day,
+                        cursor="pointer",
+                    ),
+                    spacing="2",
+                    flex_wrap="wrap",
+                    justify="end",
+                ),
+                rx.hstack(
+                    _filter_chip(
+                        "Selected day only",
+                        NexusState.participant_scope_mode == "selected_day",
+                        NexusState.set_participant_scope_mode("selected_day"),
+                    ),
+                    _filter_chip(
+                        "All dates",
+                        NexusState.participant_scope_mode == "all_dates",
+                        NexusState.set_participant_scope_mode("all_dates"),
+                    ),
+                    spacing="2",
+                    align="center",
+                    flex_wrap="wrap",
+                    justify="end",
+                ),
+                rx.text(
+                    NexusState.participant_scope_description,
+                    size="1",
+                    color=SUBTEXT,
+                    text_align=rx.breakpoints(initial="left", md="right"),
+                    max_width="460px",
+                    line_height="1.5",
+                ),
+                spacing="2",
+                align=rx.breakpoints(initial="start", md="end"),
+                width="100%",
+            ),
+            direction=rx.breakpoints(initial="column", md="row"),
+            justify="between",
+            align=rx.breakpoints(initial="start", md="center"),
+            gap="4",
+            width="100%",
+        ),
+        margin_bottom="12px",
     )
 
 
@@ -616,14 +741,22 @@ def _participant_filter_bar() -> rx.Component:
                 size="1",
                 variant="soft",
             ),
-            # Date filter
-            rx.select(
-                NexusState.participant_dates,
-                value=NexusState.filter_date,
-                on_change=NexusState.set_filter_date,
-                placeholder="Date",
-                size="1",
-                variant="soft",
+            rx.cond(
+                NexusState.show_date_filter,
+                rx.select(
+                    NexusState.participant_dates,
+                    value=NexusState.filter_date,
+                    on_change=NexusState.set_filter_date,
+                    placeholder="Date",
+                    size="1",
+                    variant="soft",
+                ),
+                rx.badge(
+                    NexusState.participant_scope_hint,
+                    color_scheme="iris",
+                    size="1",
+                    variant="soft",
+                ),
             ),
             # Issues toggle
             _filter_chip(
@@ -683,19 +816,17 @@ def _range_sync_panel() -> rx.Component:
     return glass_card(
         rx.hstack(
             rx.icon("calendar-range", size=16, color=ACCENT),
-            rx.text("Range Sync", size="2", weight="bold", color=HEADING),
+            rx.text("Sync Date Range", size="2", weight="bold", color=HEADING),
             rx.spacer(),
-            rx.cond(
-                NexusState.range_sync_result != "",
-                rx.badge(
-                    NexusState.range_sync_result,
-                    color_scheme="green",
-                    size="1",
-                    variant="soft",
-                ),
-            ),
             width="100%",
             align="center",
+        ),
+        rx.text(
+            "Import scope comes from the Start and End dates below, regardless of the participant view mode above.",
+            size="1",
+            color=SUBTEXT,
+            line_height="1.5",
+            margin_top="8px",
         ),
         rx.hstack(
             rx.vstack(
@@ -738,7 +869,7 @@ def _range_sync_panel() -> rx.Component:
                     rx.spinner(size="1"),
                     rx.icon("refresh-cw", size=14),
                 ),
-                "Sync Range",
+                "Sync selected range",
                 size="2",
                 variant="solid",
                 color_scheme="iris",
@@ -751,6 +882,22 @@ def _range_sync_panel() -> rx.Component:
             spacing="3",
             align="end",
             margin_top="8px",
+        ),
+        rx.cond(
+            NexusState.range_sync_result != "",
+            rx.box(
+                rx.text(
+                    NexusState.range_sync_result,
+                    size="1",
+                    color=GREEN,
+                    line_height="1.5",
+                ),
+                padding="8px 10px",
+                border_radius=RADIUS_SM,
+                background=GREEN_SOFT,
+                margin_top="12px",
+            ),
+            rx.fragment(),
         ),
         margin_bottom="12px",
         padding="14px 18px",
@@ -811,76 +958,173 @@ def _issue_editor_dialog() -> rx.Component:
 
 
 def _sync_bar() -> rx.Component:
-    return rx.hstack(
-        # Sync today button
-        rx.button(
-            rx.cond(
-                NexusState.is_syncing,
-                rx.spinner(size="1"),
-                rx.icon("refresh-cw", size=14),
+    return glass_card(
+        rx.flex(
+            rx.vstack(
+                rx.hstack(
+                    rx.icon("search", size=14, color=ACCENT),
+                    rx.text("Workspace", size="2", weight="bold", color=HEADING),
+                    spacing="2",
+                    align="center",
+                ),
+                rx.text(
+                    "Search works inside the current participant scope. Manual adds default to the selected day.",
+                    size="1",
+                    color=SUBTEXT,
+                    line_height="1.5",
+                ),
+                spacing="1",
+                align="start",
             ),
-            "Sync Today",
-            size="2",
-            variant="soft",
-            color_scheme="iris",
-            border_radius=RADIUS_MD,
-            on_click=NexusState.sync_campaign_calendar,
-            loading=NexusState.is_syncing,
-            cursor="pointer",
-        ),
-        rx.cond(
-            NexusState.last_sync_time != "",
-            rx.text(
-                "Synced " + NexusState.last_sync_time,
-                size="1",
-                color=SUBTEXT,
-            ),
-        ),
-        rx.spacer(),
-        # CSV export
-        rx.button(
-            rx.icon("download", size=14),
-            "Export CSV",
-            size="1",
-            variant="soft",
-            color_scheme="gray",
-            border_radius=RADIUS_SM,
-            on_click=NexusState.export_csv,
-            cursor="pointer",
-        ),
-        # Add participant
-        rx.button(
-            rx.icon("user-plus", size=14),
-            "Add",
-            size="1",
-            variant="soft",
-            color_scheme="iris",
-            border_radius=RADIUS_SM,
-            on_click=NexusState.toggle_add_participant,
-            cursor="pointer",
-        ),
-        # Search
-        rx.box(
             rx.hstack(
-                rx.icon("search", size=14, color=SUBTEXT),
-                rx.input(
-                    placeholder="Search participants...",
-                    value=NexusState.search_query,
-                    on_change=NexusState.set_search,
-                    variant="surface",
+                rx.box(
+                    rx.hstack(
+                        rx.icon("search", size=14, color=SUBTEXT),
+                        rx.input(
+                            placeholder="Search participants...",
+                            value=NexusState.search_query,
+                            on_change=NexusState.set_search,
+                            variant="surface",
+                            size="2",
+                            border_radius=RADIUS_MD,
+                            width="240px",
+                        ),
+                        spacing="2",
+                        align="center",
+                    ),
+                ),
+                rx.button(
+                    rx.icon("user-plus", size=14),
+                    "Add Participant",
                     size="2",
+                    variant="soft",
+                    color_scheme="iris",
                     border_radius=RADIUS_MD,
-                    width="200px",
+                    on_click=NexusState.toggle_add_participant,
+                    cursor="pointer",
+                ),
+                spacing="3",
+                align="center",
+                flex_wrap="wrap",
+                justify="end",
+            ),
+            direction=rx.breakpoints(initial="column", md="row"),
+            justify="between",
+            align=rx.breakpoints(initial="start", md="center"),
+            gap="4",
+            width="100%",
+        ),
+        rx.grid(
+            rx.vstack(
+                rx.text("Sync", size="1", weight="bold", color=SUBTEXT),
+                rx.text(
+                    "One-day sync always imports exactly " + NexusState.display_date_label + ".",
+                    size="1",
+                    color=TEXT,
+                    line_height="1.5",
+                ),
+                rx.button(
+                    rx.cond(
+                        NexusState.is_syncing,
+                        rx.spinner(size="1"),
+                        rx.icon("refresh-cw", size=14),
+                    ),
+                    NexusState.sync_selected_day_button_label,
+                    size="2",
+                    variant="soft",
+                    color_scheme="iris",
+                    border_radius=RADIUS_MD,
+                    on_click=NexusState.sync_campaign_calendar,
+                    loading=NexusState.is_syncing,
+                    cursor="pointer",
+                ),
+                rx.cond(
+                    NexusState.last_sync_result != "",
+                    rx.box(
+                        rx.text(
+                            NexusState.last_sync_result,
+                            size="1",
+                            color=GREEN,
+                            line_height="1.5",
+                        ),
+                        padding="8px 10px",
+                        border_radius=RADIUS_SM,
+                        background=GREEN_SOFT,
+                    ),
+                    rx.fragment(),
                 ),
                 spacing="2",
-                align="center",
+                align="start",
+                width="100%",
             ),
+            rx.vstack(
+                rx.text("Export", size="1", weight="bold", color=SUBTEXT),
+                rx.text(
+                    "Choose the exact slice to download. File names include the selected scope.",
+                    size="1",
+                    color=TEXT,
+                    line_height="1.5",
+                ),
+                rx.flex(
+                    rx.button(
+                        rx.icon("download", size=14),
+                        NexusState.current_filters_export_button_label,
+                        size="1",
+                        variant="soft",
+                        color_scheme="gray",
+                        border_radius=RADIUS_SM,
+                        on_click=NexusState.export_current_filters_csv,
+                        cursor="pointer",
+                    ),
+                    rx.button(
+                        rx.icon("download", size=14),
+                        NexusState.selected_day_export_button_label,
+                        size="1",
+                        variant="soft",
+                        color_scheme="gray",
+                        border_radius=RADIUS_SM,
+                        on_click=NexusState.export_selected_day_csv,
+                        cursor="pointer",
+                    ),
+                    rx.button(
+                        rx.icon("download", size=14),
+                        NexusState.all_dates_export_button_label,
+                        size="1",
+                        variant="soft",
+                        color_scheme="gray",
+                        border_radius=RADIUS_SM,
+                        on_click=NexusState.export_all_dates_csv,
+                        cursor="pointer",
+                    ),
+                    gap="2",
+                    wrap="wrap",
+                    width="100%",
+                ),
+                rx.cond(
+                    NexusState.last_export_result != "",
+                    rx.box(
+                        rx.text(
+                            NexusState.last_export_result,
+                            size="1",
+                            color=ACCENT,
+                            line_height="1.5",
+                        ),
+                        padding="8px 10px",
+                        border_radius=RADIUS_SM,
+                        background=ACCENT_SOFT,
+                    ),
+                    rx.fragment(),
+                ),
+                spacing="2",
+                align="start",
+                width="100%",
+            ),
+            columns=rx.breakpoints(initial="1", md="2"),
+            spacing="4",
+            width="100%",
+            margin_top="16px",
         ),
-        spacing="3",
-        align="center",
-        width="100%",
-        flex_wrap="wrap",
-        margin_bottom="8px",
+        margin_bottom="12px",
     )
 
 
@@ -1000,7 +1244,7 @@ def _bulk_action_bar() -> rx.Component:
                 flex_wrap="wrap",
             ),
             rx.text(
-                "Bulk actions only apply to participants visible in the current search and filter view.",
+                "Bulk actions only apply to participants visible in the current search, filter, and date scope.",
                 size="1",
                 color=SUBTEXT,
                 margin_top="10px",
@@ -1527,6 +1771,8 @@ def campaign_detail_page() -> rx.Component:
         ),
         # -- campaign header
         _campaign_header(),
+        # -- selected date + participant scope
+        _date_scope_bar(),
         rx.box(height="16px"),
         # -- stats & progress
         _stats_and_progress(),

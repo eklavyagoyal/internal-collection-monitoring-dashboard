@@ -27,8 +27,8 @@ Built with **Reflex** (Python → React + FastAPI), **MongoDB** (async via Motor
 | **Issue Workflow** | Flag participant issues, preview them inline, filter to exceptions only, and resolve them quickly |
 | **Bulk Actions** | Select visible rows → bulk mark `Booked` / `Completed`, assign platform/model tags, or admin-delete selected rows |
 | **Sorting** | Click column headers to sort by time or participant name |
-| **Search** | Filter by name, email, platform, model tag, notes, or issue comment |
-| **CSV Export** | Download a campaign-wide CSV including notes and issue comments |
+| **Search** | Filter by name, email, platform, model tag, notes, or issue comment inside the current participant scope |
+| **CSV Export** | Export `Current filters`, `Selected day`, or `All dates` with scope-aware filenames |
 
 ### Calendar Integration
 | Feature | Detail |
@@ -42,7 +42,7 @@ Built with **Reflex** (Python → React + FastAPI), **MongoDB** (async via Motor
 | Feature | Detail |
 |---|---|
 | **Real-Time Multi-User** | 10-second auto-refresh via MongoDB, pushed to all clients over WebSocket |
-| **Date Navigation** | Step forward/back by day to review historical data |
+| **Date Navigation** | Visible `Previous / Today / Next` day context on dashboard and campaign detail pages |
 | **Dark / Light Mode** | Toggle with a single click |
 | **Configurable Labels** | Add/remove platforms and model tags from Settings — no redeploy needed |
 | **Admin Safety Rails** | Admin PIN gates campaign/settings mutations and protected actions write lightweight audit events |
@@ -210,6 +210,8 @@ All colours, shadows, radii, and component helpers live in `components/design_to
 - Daily tables still show appointment rows for the currently loaded date range/view
 
 ### Participant Operations
+- The participant table now has an explicit scope: **Selected day only** or **All dates**
+- One-day sync and **Selected day** export always use the visible selected date
 - Bulk selection follows the current visible filtered view, so hidden rows are never changed by accident
 - Row-level platform, model, status, notes, and issue updates save optimistically and show lightweight save feedback
 - Issue comments are distinct from routine notes and stay included in CSV exports
