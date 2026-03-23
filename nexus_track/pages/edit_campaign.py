@@ -7,6 +7,8 @@ from ..components.design_tokens import (
     ACCENT,
     ACCENT_GRADIENT,
     ACCENT_SOFT,
+    AMBER,
+    AMBER_SOFT,
     BORDER,
     CARD_BG,
     HEADING,
@@ -70,6 +72,292 @@ def _admin_locked_panel() -> rx.Component:
             spacing="3",
             flex_wrap="wrap",
         ),
+    )
+
+
+def _calendar_discovery_hint() -> rx.Component:
+    return rx.vstack(
+        rx.hstack(
+            rx.button(
+                rx.cond(
+                    NexusState.calendars_loading,
+                    rx.spinner(size="1"),
+                    rx.icon("refresh-cw", size=14),
+                ),
+                "Discover Calendars Here",
+                size="2",
+                variant="soft",
+                color_scheme="iris",
+                border_radius=RADIUS_MD,
+                on_click=NexusState.fetch_available_calendars,
+                loading=NexusState.calendars_loading,
+                cursor="pointer",
+            ),
+            rx.link(
+                rx.button(
+                    "Open Settings",
+                    size="2",
+                    variant="soft",
+                    color_scheme="gray",
+                    border_radius=RADIUS_MD,
+                    cursor="pointer",
+                ),
+                href="/settings",
+                _hover={"text_decoration": "none"},
+            ),
+            spacing="3",
+            flex_wrap="wrap",
+            width="100%",
+        ),
+        rx.text(
+            "Discover current Google Calendar IDs here without leaving the edit flow.",
+            size="1",
+            color=SUBTEXT,
+            line_height="1.6",
+        ),
+        rx.cond(
+            NexusState.available_calendars.length() > 0,
+            rx.vstack(
+                rx.foreach(
+                    NexusState.available_calendars,
+                    lambda cal: rx.hstack(
+                        rx.cond(
+                            cal["primary"],
+                            rx.badge("Primary", color_scheme="green", size="1"),
+                            rx.badge("Shared", color_scheme="blue", size="1"),
+                        ),
+                        rx.vstack(
+                            rx.text(
+                                cal["summary"].to(str),
+                                size="2",
+                                weight="medium",
+                                color=HEADING,
+                            ),
+                            rx.text(
+                                cal["id"].to(str),
+                                size="1",
+                                color=SUBTEXT,
+                            ),
+                            spacing="0",
+                            align="start",
+                            min_width="0",
+                        ),
+                        rx.spacer(),
+                        rx.icon_button(
+                            rx.icon("copy", size=14),
+                            size="1",
+                            variant="ghost",
+                            color_scheme="gray",
+                            on_click=rx.set_clipboard(cal["id"].to(str)),
+                            cursor="pointer",
+                        ),
+                        spacing="3",
+                        align="center",
+                        width="100%",
+                        padding="10px 12px",
+                        border_radius=RADIUS_MD,
+                        border=BORDER,
+                        background=ACCENT_SOFT,
+                    ),
+                ),
+                spacing="2",
+                width="100%",
+            ),
+            rx.box(
+                rx.hstack(
+                    rx.icon("lightbulb", size=14, color=AMBER),
+                    rx.text(
+                        "Use Advanced only when this campaign genuinely needs multiple booking calendars. Single-calendar campaigns stay easier to reason about in Simple mode.",
+                        size="1",
+                        color=SUBTEXT,
+                        line_height="1.6",
+                    ),
+                    spacing="2",
+                    align="start",
+                ),
+                padding="12px",
+                border_radius=RADIUS_MD,
+                background=AMBER_SOFT,
+                width="100%",
+            ),
+        ),
+        spacing="3",
+        width="100%",
+    )
+
+
+def _advanced_calendar_row(entry) -> rx.Component:
+    return rx.box(
+        rx.hstack(
+            rx.badge("Calendar Source", size="1", variant="soft", color_scheme="iris"),
+            rx.spacer(),
+            rx.button(
+                rx.icon("trash-2", size=12),
+                "Remove",
+                size="1",
+                variant="soft",
+                color_scheme="red",
+                border_radius=RADIUS_MD,
+                on_click=NexusState.remove_form_calendar_entry(entry["key"].to(str)),
+                cursor="pointer",
+            ),
+            width="100%",
+            align="center",
+        ),
+        rx.vstack(
+            rx.text("Calendar ID *", size="2", weight="medium", color=SUBTEXT),
+            rx.input(
+                value=entry["calendar_id"].to(str),
+                on_change=lambda value: NexusState.set_form_calendar_entry_id(
+                    entry["key"].to(str),
+                    value,
+                ),
+                placeholder="primary or team-calendar@group.calendar.google.com",
+                size="2",
+                variant="surface",
+                border_radius=RADIUS_MD,
+                width="100%",
+            ),
+            rx.text(
+                "Use 'primary' for the main calendar or paste a shared calendar ID.",
+                size="1",
+                color=SUBTEXT,
+                font_style="italic",
+            ),
+            spacing="1",
+            width="100%",
+        ),
+        rx.vstack(
+            rx.text("Keyword Filter (optional)", size="2", weight="medium", color=SUBTEXT),
+            rx.input(
+                value=entry["filter"].to(str),
+                on_change=lambda value: NexusState.set_form_calendar_entry_filter(
+                    entry["key"].to(str),
+                    value,
+                ),
+                placeholder="e.g. Worldcoin",
+                size="2",
+                variant="surface",
+                border_radius=RADIUS_MD,
+                width="100%",
+            ),
+            rx.text(
+                "Only events whose title or attendee name contains this text will sync from this calendar.",
+                size="1",
+                color=SUBTEXT,
+                font_style="italic",
+            ),
+            spacing="1",
+            width="100%",
+        ),
+        spacing="3",
+        width="100%",
+        padding="16px",
+        border_radius=RADIUS_MD,
+        border=BORDER,
+        background=ACCENT_SOFT,
+    )
+
+
+def _calendar_configuration_section() -> rx.Component:
+    return glass_card(
+        section_header(
+            "calendar",
+            "Calendar Configuration",
+            "Keep a clean simple setup for one source, or switch to Advanced when this campaign needs multiple booking calendars.",
+        ),
+        rx.hstack(
+            rx.button(
+                "Simple setup",
+                size="2",
+                variant=rx.cond(
+                    NexusState.form_calendar_mode == "simple",
+                    "solid",
+                    "soft",
+                ),
+                color_scheme="iris",
+                border_radius=RADIUS_MD,
+                on_click=NexusState.set_form_calendar_mode("simple"),
+                cursor="pointer",
+            ),
+            rx.button(
+                "Advanced multi-calendar",
+                size="2",
+                variant=rx.cond(
+                    NexusState.form_calendar_mode == "advanced",
+                    "solid",
+                    "soft",
+                ),
+                color_scheme="gray",
+                border_radius=RADIUS_MD,
+                on_click=NexusState.set_form_calendar_mode("advanced"),
+                cursor="pointer",
+            ),
+            spacing="3",
+            flex_wrap="wrap",
+            margin_bottom="16px",
+        ),
+        rx.cond(
+            NexusState.form_calendar_mode == "simple",
+            rx.vstack(
+                form_field(
+                    "Calendar ID",
+                    NexusState.form_calendar_id,
+                    NexusState.set_form_calendar_id,
+                    "primary",
+                    helper="Use 'primary' for your main calendar, or paste a shared calendar ID.",
+                ),
+                form_field(
+                    "Keyword Filter (optional)",
+                    NexusState.form_calendar_filter,
+                    NexusState.set_form_calendar_filter,
+                    "e.g. Worldcoin",
+                    helper="Only sync events whose title contains this keyword.",
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            rx.vstack(
+                rx.box(
+                    rx.text(
+                        "Advanced mode syncs every listed calendar. Blank rows are ignored, and duplicate calendar IDs are blocked so edits cannot accidentally double-import the same source.",
+                        size="1",
+                        color=SUBTEXT,
+                        line_height="1.6",
+                    ),
+                    padding="12px",
+                    border_radius=RADIUS_MD,
+                    background=AMBER_SOFT,
+                    width="100%",
+                ),
+                rx.vstack(
+                    rx.foreach(
+                        NexusState.form_calendar_entries,
+                        _advanced_calendar_row,
+                    ),
+                    spacing="3",
+                    width="100%",
+                ),
+                rx.button(
+                    rx.icon("plus", size=14),
+                    "Add Another Calendar",
+                    size="2",
+                    variant="soft",
+                    color_scheme="iris",
+                    border_radius=RADIUS_MD,
+                    on_click=NexusState.add_form_calendar_entry,
+                    cursor="pointer",
+                    align_self="start",
+                ),
+                spacing="3",
+                width="100%",
+            ),
+        ),
+        rx.box(
+            _calendar_discovery_hint(),
+            margin_top="16px",
+        ),
+        margin_bottom="24px",
     )
 
 
@@ -198,31 +486,8 @@ def edit_campaign_page() -> rx.Component:
                     ),
                     margin_bottom="16px",
                 ),
-                # -- Section 3: Calendar Config
-                glass_card(
-                    section_header(
-                        "calendar",
-                        "Calendar Configuration",
-                        "Google Calendar ID and keyword filter",
-                    ),
-                    rx.vstack(
-                        form_field("Calendar ID", NexusState.form_calendar_id,
-                               NexusState.set_form_calendar_id,
-                               "primary"),
-                        form_field("Keyword Filter", NexusState.form_calendar_filter,
-                               NexusState.set_form_calendar_filter,
-                               "e.g. Worldcoin"),
-                        rx.text(
-                            "Tip: Go to Settings -> Discover Calendars to find your Calendar IDs.",
-                            size="1",
-                            color=SUBTEXT,
-                            font_style="italic",
-                        ),
-                        spacing="3",
-                        width="100%",
-                    ),
-                    margin_bottom="24px",
-                ),
+                # -- Section 4: Calendar Config
+                _calendar_configuration_section(),
                 # -- Section 5: Device Configuration
                 glass_card(
                     section_header(
@@ -277,31 +542,48 @@ def edit_campaign_page() -> rx.Component:
                         rx.vstack(
                             rx.text("Device Quotas (optional)", size="2", weight="medium", color=SUBTEXT),
                             rx.text(
-                                "Set max participants per platform. Format: enter quota for each platform.",
+                                "Only selected platforms appear here. Leave a field blank for no limit.",
                                 size="1", color=SUBTEXT, font_style="italic",
                             ),
-                            rx.foreach(
-                                NexusState.platforms,
-                                lambda p: rx.hstack(
-                                    rx.text(p, size="2", weight="medium", color=HEADING, min_width="90px"),
-                                    rx.el.input(
-                                        type="text",
-                                        input_mode="numeric",
-                                        placeholder="No limit",
-                                        default_value=NexusState.form_device_quota[p].to(str),
-                                        on_blur=lambda v: NexusState.set_form_device_quota_value(p + ":" + v),
-                                        style={
-                                            "width": "100px",
-                                            "padding": "6px 10px",
-                                            "border_radius": RADIUS_SM,
-                                            "border": BORDER,
-                                            "background": CARD_BG,
-                                            "color": "inherit",
-                                            "font_size": "13px",
-                                        },
+                            rx.cond(
+                                NexusState.form_device_quota_rows.length() > 0,
+                                rx.foreach(
+                                    NexusState.form_device_quota_rows,
+                                    lambda row: rx.hstack(
+                                        rx.text(
+                                            row.platform,
+                                            size="2",
+                                            weight="medium",
+                                            color=HEADING,
+                                            min_width="110px",
+                                        ),
+                                        rx.el.input(
+                                            type="text",
+                                            input_mode="numeric",
+                                            placeholder="No limit",
+                                            default_value=row.value,
+                                            on_blur=lambda value: NexusState.set_form_device_quota_value(
+                                                row.platform + ":" + value,
+                                            ),
+                                            style={
+                                                "width": "120px",
+                                                "padding": "6px 10px",
+                                                "border_radius": RADIUS_SM,
+                                                "border": BORDER,
+                                                "background": CARD_BG,
+                                                "color": "inherit",
+                                                "font_size": "13px",
+                                            },
+                                        ),
+                                        spacing="2",
+                                        align="center",
                                     ),
-                                    spacing="2",
-                                    align="center",
+                                ),
+                                rx.text(
+                                    "Select at least one platform to configure quotas.",
+                                    size="1",
+                                    color=SUBTEXT,
+                                    font_style="italic",
                                 ),
                             ),
                             spacing="2",
@@ -310,12 +592,18 @@ def edit_campaign_page() -> rx.Component:
                         rx.vstack(
                             rx.text("Default Platform (optional)", size="2", weight="medium", color=SUBTEXT),
                             rx.select(
-                                NexusState.platforms_with_none,
+                                NexusState.form_default_platform_options,
                                 value=NexusState.form_default_platform_display,
                                 on_change=NexusState.set_form_default_platform,
                                 placeholder="None (set manually)",
                                 size="2",
                                 variant="surface",
+                            ),
+                            rx.text(
+                                NexusState.form_default_platform_helper,
+                                size="1",
+                                color=SUBTEXT,
+                                font_style="italic",
                             ),
                             spacing="1",
                             width="100%",
@@ -323,12 +611,18 @@ def edit_campaign_page() -> rx.Component:
                         rx.vstack(
                             rx.text("Default Model Tag (optional)", size="2", weight="medium", color=SUBTEXT),
                             rx.select(
-                                NexusState.model_tags_with_none,
+                                NexusState.form_default_model_tag_options,
                                 value=NexusState.form_default_model_tag_display,
                                 on_change=NexusState.set_form_default_model_tag,
                                 placeholder="None (set manually)",
                                 size="2",
                                 variant="surface",
+                            ),
+                            rx.text(
+                                NexusState.form_default_model_tag_helper,
+                                size="1",
+                                color=SUBTEXT,
+                                font_style="italic",
                             ),
                             spacing="1",
                             width="100%",

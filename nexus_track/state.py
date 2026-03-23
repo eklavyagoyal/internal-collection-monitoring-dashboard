@@ -11,6 +11,7 @@ import asyncio
 import csv
 import io
 import logging
+import secrets
 from datetime import datetime, timedelta
 
 import reflex as rx
@@ -32,6 +33,8 @@ from .backend.mongo_client import (
     get_all_campaigns_with_stats,
     get_recent_audit_events,
     get_campaign,
+    get_platform_model_tag_usage,
+    get_platform_usage,
     get_participants_for_campaign,
     get_participants_for_export,
     get_settings,
@@ -54,6 +57,7 @@ _auto_refresh_running = False
 APP_REFRESH_LIVE_SECONDS = 35
 APP_REFRESH_DELAY_SECONDS = 90
 CAMPAIGN_SYNC_STALE_MINUTES = 60
+FORM_NONE_OPTION_LABEL = "None (set manually)"
 
 
 def _normalize_local_datetime(value: datetime) -> datetime:
@@ -426,6 +430,260 @@ def _sanitize_filename_fragment(value: str) -> str:
     return compact or "export"
 
 
+def _ordered_unique_labels(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        label = str(value or "").strip()
+        if not label or label in seen:
+            continue
+        ordered.append(label)
+        seen.add(label)
+    return ordered
+
+
+def _human_join(parts: list[str]) -> str:
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return parts[0] + " and " + parts[1]
+    return ", ".join(parts[:-1]) + ", and " + parts[-1]
+
+
+def _selected_form_platforms(
+    platforms: list[str],
+    selected_platforms: list[str],
+) -> list[str]:
+    selected_set = set(_ordered_unique_labels(selected_platforms))
+    return [
+        platform
+        for platform in _ordered_unique_labels(platforms)
+        if platform in selected_set
+    ]
+
+
+def _available_model_tags_for_form(
+    platform_model_tags: dict,
+    selected_platforms: list[str],
+    default_platform: str,
+) -> list[str]:
+    mapping = _to_plain_python(platform_model_tags) or {}
+    candidate_platforms = (
+        [str(default_platform or "").strip()]
+        if str(default_platform or "").strip()
+        else _ordered_unique_labels(selected_platforms)
+    )
+    tags: list[str] = []
+    seen: set[str] = set()
+    for platform in candidate_platforms:
+        raw_tags = mapping.get(platform, [])
+        if not isinstance(raw_tags, list):
+            continue
+        for tag in raw_tags:
+            cleaned = str(tag or "").strip()
+            if cleaned and cleaned not in seen:
+                tags.append(cleaned)
+                seen.add(cleaned)
+    return tags
+
+
+def _sanitize_form_device_configuration(
+    *,
+    platforms: list[str],
+    selected_platforms: list[str],
+    device_quota: dict,
+    default_platform: str,
+    default_model_tag: str,
+    platform_model_tags: dict,
+) -> dict[str, object]:
+    selected = _selected_form_platforms(platforms, selected_platforms)
+    raw_quota = dict(_to_plain_python(device_quota) or {})
+    cleaned_quota: dict[str, int] = {}
+    for platform in selected:
+        raw_value = raw_quota.get(platform, "")
+        if raw_value in ("", None):
+            continue
+        try:
+            cleaned_quota[platform] = max(0, int(raw_value))
+        except (TypeError, ValueError):
+            continue
+
+    cleaned_default_platform = str(default_platform or "").strip()
+    if cleaned_default_platform and cleaned_default_platform not in selected:
+        cleaned_default_platform = ""
+
+    allowed_tags = _available_model_tags_for_form(
+        platform_model_tags,
+        selected,
+        cleaned_default_platform,
+    )
+    cleaned_default_model_tag = str(default_model_tag or "").strip()
+    if cleaned_default_model_tag and cleaned_default_model_tag not in allowed_tags:
+        cleaned_default_model_tag = ""
+
+    return {
+        "device_types": selected,
+        "device_quota": cleaned_quota,
+        "default_platform": cleaned_default_platform,
+        "default_model_tag": cleaned_default_model_tag,
+        "allowed_model_tags": allowed_tags,
+    }
+
+
+def _new_calendar_config_row(
+    calendar_id: str = "",
+    keyword_filter: str = "",
+    *,
+    key: str = "",
+) -> dict[str, str]:
+    return {
+        "key": key or secrets.token_hex(4),
+        "calendar_id": str(calendar_id or ""),
+        "filter": str(keyword_filter or ""),
+    }
+
+
+def _coerce_calendar_config_rows(entries: list[dict] | None) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for entry in _to_plain_python(entries) or []:
+        if not isinstance(entry, dict):
+            continue
+        rows.append(
+            _new_calendar_config_row(
+                entry.get("calendar_id", ""),
+                entry.get("filter", ""),
+                key=str(entry.get("key", "") or ""),
+            ),
+        )
+    return rows
+
+
+def _initial_calendar_config_rows(
+    calendar_id: str,
+    keyword_filter: str,
+) -> list[dict[str, str]]:
+    return [
+        _new_calendar_config_row(
+            calendar_id or "primary",
+            keyword_filter,
+        ),
+    ]
+
+
+def _populated_calendar_config_rows(entries: list[dict] | None) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for entry in _coerce_calendar_config_rows(entries):
+        calendar_id = str(entry.get("calendar_id", "") or "").strip()
+        keyword_filter = str(entry.get("filter", "") or "").strip()
+        if not calendar_id and not keyword_filter:
+            continue
+        rows.append({
+            "calendar_id": calendar_id,
+            "filter": keyword_filter,
+        })
+    return rows
+
+
+def _normalize_calendar_config_rows(
+    entries: list[dict] | None,
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for entry in _coerce_calendar_config_rows(entries):
+        calendar_id = str(entry.get("calendar_id", "") or "").strip()
+        keyword_filter = str(entry.get("filter", "") or "").strip()
+        if not calendar_id and not keyword_filter:
+            continue
+        if not calendar_id:
+            raise ValueError("Each calendar filter needs a calendar ID.")
+        calendar_key = calendar_id.lower()
+        if calendar_key in seen:
+            raise ValueError(f"Calendar '{calendar_id}' is listed more than once.")
+        seen.add(calendar_key)
+        rows.append({
+            "calendar_id": calendar_id,
+            "filter": keyword_filter,
+        })
+    return rows
+
+
+def _build_campaign_calendar_payload(
+    *,
+    mode: str,
+    calendar_id: str,
+    calendar_filter: str,
+    calendar_entries: list[dict] | None,
+) -> dict[str, object]:
+    simple_calendar_id = str(calendar_id or "").strip() or "primary"
+    simple_filter = str(calendar_filter or "").strip()
+    if mode != "advanced":
+        return {
+            "calendar_id": simple_calendar_id,
+            "calendar_filter": simple_filter,
+            "calendar_ids": [],
+        }
+
+    normalized_entries = _normalize_calendar_config_rows(calendar_entries)
+    if not normalized_entries:
+        raise ValueError(
+            "Add at least one calendar before saving Advanced mode.",
+        )
+    primary_entry = normalized_entries[0]
+    return {
+        "calendar_id": primary_entry["calendar_id"],
+        "calendar_filter": primary_entry["filter"],
+        "calendar_ids": normalized_entries,
+    }
+
+
+def _build_platform_usage_message(label: str, usage: dict[str, int]) -> str:
+    blockers: list[str] = []
+    participant_count = int(usage.get("participant_count", 0))
+    campaign_device_count = int(usage.get("campaign_device_type_count", 0))
+    campaign_default_count = int(usage.get("campaign_default_count", 0))
+    if participant_count:
+        blockers.append(f"{participant_count} participant row(s)")
+    if campaign_device_count:
+        blockers.append(f"{campaign_device_count} campaign platform selection(s)")
+    if campaign_default_count:
+        blockers.append(f"{campaign_default_count} campaign default(s)")
+    if not blockers:
+        return ""
+    return (
+        f"Cannot remove platform '{label}' yet. It is still used by "
+        + _human_join(blockers)
+        + "."
+    )
+
+
+def _build_model_tag_usage_message(
+    platform: str,
+    tag: str,
+    usage: dict[str, int],
+) -> str:
+    blockers: list[str] = []
+    participant_count = int(usage.get("participant_count", 0))
+    campaign_default_count = int(usage.get("campaign_default_count", 0))
+    campaign_shared_default_count = int(
+        usage.get("campaign_shared_default_count", 0),
+    )
+    if participant_count:
+        blockers.append(f"{participant_count} participant row(s)")
+    if campaign_default_count:
+        blockers.append(f"{campaign_default_count} campaign default(s)")
+    if campaign_shared_default_count:
+        blockers.append(f"{campaign_shared_default_count} shared campaign default(s)")
+    if not blockers:
+        return ""
+    return (
+        f"Cannot remove model tag '{tag}' from {platform} yet. It is still used by "
+        + _human_join(blockers)
+        + "."
+    )
+
+
 def _build_export_filename(
     campaign_name: str,
     scope_key: str,
@@ -698,6 +956,11 @@ class PlatformOption(BaseModel):
     selected: bool = False
 
 
+class FormQuotaRow(BaseModel):
+    platform: str = ""
+    value: str = ""
+
+
 class AuditEvent(BaseModel):
     timestamp: str = ""
     summary: str = ""
@@ -715,6 +978,8 @@ class NexusState(rx.State):
     new_model_tag: str = ""
     model_tag_add_platform: str = ""
     model_tag_inputs: dict = {}
+    settings_feedback: str = ""
+    settings_feedback_tone: str = "info"
 
     available_calendars: list[dict] = []
     calendars_loading: bool = False
@@ -805,6 +1070,8 @@ class NexusState(rx.State):
     form_goal: str = "100"
     form_calendar_id: str = "primary"
     form_calendar_filter: str = ""
+    form_calendar_mode: str = "simple"
+    form_calendar_entries: list[dict] = []
     form_error: str = ""
     form_is_edit: bool = False
     form_edit_campaign_id: str = ""
@@ -1469,13 +1736,16 @@ class NexusState(rx.State):
     # SETTINGS / LABELS
 
     @rx.var(cache=True)
-    def platforms_with_none(self) -> list[str]:
-        return ["__none__"] + list(self.platforms)
+    def form_selected_platforms(self) -> list[str]:
+        return _selected_form_platforms(
+            self.platforms,
+            self.form_device_types,
+        )
 
     @rx.var(cache=True)
     def platform_options(self) -> list[PlatformOption]:
         """Platforms with selected state for the campaign form checkboxes."""
-        selected = set(self.form_device_types)
+        selected = set(self.form_selected_platforms)
         return [
             PlatformOption(name=p, selected=p in selected)
             for p in self.platforms
@@ -1485,16 +1755,71 @@ class NexusState(rx.State):
     def all_model_tags(self) -> list[str]:
         """Flat list of all model tags across all platforms."""
         tags: list[str] = []
-        for models in self.platform_model_tags.values():
+        mapping = _to_plain_python(self.platform_model_tags) or {}
+        for platform in self.platforms:
+            models = mapping.get(platform, [])
             if isinstance(models, list):
                 for t in models:
-                    if t and t not in tags:
-                        tags.append(t)
-        return sorted(tags)
+                    cleaned = str(t or "").strip()
+                    if cleaned and cleaned not in tags:
+                        tags.append(cleaned)
+        return tags
 
     @rx.var(cache=True)
-    def model_tags_with_none(self) -> list[str]:
-        return ["__none__"] + self.all_model_tags
+    def form_default_platform_options(self) -> list[str]:
+        return [FORM_NONE_OPTION_LABEL] + self.form_selected_platforms
+
+    @rx.var(cache=True)
+    def form_default_model_tag_options(self) -> list[str]:
+        return [FORM_NONE_OPTION_LABEL] + _available_model_tags_for_form(
+            self.platform_model_tags,
+            self.form_selected_platforms,
+            self.form_default_platform,
+        )
+
+    @rx.var(cache=True)
+    def form_default_platform_helper(self) -> str:
+        if not self.form_selected_platforms:
+            return "Pick campaign platforms first."
+        return (
+            "Optional shortcut for new rows and sync-created participants. "
+            "Only selected campaign platforms appear here."
+        )
+
+    @rx.var(cache=True)
+    def form_default_model_tag_helper(self) -> str:
+        if not self.form_selected_platforms:
+            return "Pick campaign platforms first."
+        available_tags = _available_model_tags_for_form(
+            self.platform_model_tags,
+            self.form_selected_platforms,
+            self.form_default_platform,
+        )
+        if available_tags:
+            if self.form_default_platform:
+                return (
+                    "Uses model tags configured for "
+                    + self.form_default_platform
+                    + "."
+                )
+            return "Uses model tags configured across the selected campaign platforms."
+        if self.form_default_platform:
+            return (
+                "No model tags are configured yet for "
+                + self.form_default_platform
+                + "."
+            )
+        return "No model tags are configured yet for the selected campaign platforms."
+
+    @rx.var(cache=True)
+    def form_device_quota_rows(self) -> list[FormQuotaRow]:
+        quotas = dict(_to_plain_python(self.form_device_quota) or {})
+        rows: list[FormQuotaRow] = []
+        for platform in self.form_selected_platforms:
+            raw_value = quotas.get(platform, "")
+            value = "" if raw_value in ("", None) else str(raw_value)
+            rows.append(FormQuotaRow(platform=platform, value=value))
+        return rows
 
     @rx.var(cache=True)
     def platform_model_configs(self) -> list[PlatformModelConfig]:
@@ -1514,19 +1839,42 @@ class NexusState(rx.State):
 
     @rx.var(cache=True)
     def form_default_platform_display(self) -> str:
-        """Convert empty string to sentinel for select display."""
-        return "__none__" if self.form_default_platform == "" else self.form_default_platform
+        return self.form_default_platform or FORM_NONE_OPTION_LABEL
 
     @rx.var(cache=True)
     def form_default_model_tag_display(self) -> str:
-        """Convert empty string to sentinel for select display."""
-        return "__none__" if self.form_default_model_tag == "" else self.form_default_model_tag
+        return self.form_default_model_tag or FORM_NONE_OPTION_LABEL
+
+    async def prepare_new_campaign_form(self):
+        await self.load_settings()
+        self.clear_form()
+
+    async def prepare_settings_page(self):
+        self.settings_feedback = ""
+        self.settings_feedback_tone = "info"
+        await self.load_settings()
+        await self.load_recent_admin_actions()
 
     async def load_settings(self):
         doc = await get_settings()
-        self.platforms = doc.get("platforms", self.platforms)
+        self.platforms = _ordered_unique_labels(
+            doc.get("platforms", self.platforms),
+        )
         self.has_admin_pin = bool(doc.get("admin_pin_hash", ""))
-        self.platform_model_tags = doc.get("platform_model_tags", {})
+        raw_mapping = _to_plain_python(doc.get("platform_model_tags", {})) or {}
+        normalized_mapping: dict[str, list[str]] = {}
+        for platform in self.platforms:
+            normalized_mapping[platform] = _ordered_unique_labels(
+                raw_mapping.get(platform, []),
+            )
+        self.platform_model_tags = normalized_mapping
+        if self.campaign_device_filter and self.campaign_device_filter not in self.platforms:
+            self.campaign_device_filter = ""
+        if self.filter_platform and self.filter_platform not in self.platforms:
+            self.filter_platform = ""
+        if self.bulk_platform_value and self.bulk_platform_value not in self.platforms:
+            self.bulk_platform_value = ""
+        self._sync_form_device_configuration()
 
     async def load_recent_admin_actions(self):
         rows = await get_recent_audit_events(limit=8)
@@ -1545,6 +1893,42 @@ class NexusState(rx.State):
                 resource_label=row.get("resource_label", ""),
             ))
         self.recent_admin_actions = events
+
+    def _set_settings_feedback(self, message: str, tone: str = "info") -> None:
+        self.settings_feedback = message
+        self.settings_feedback_tone = tone
+
+    def _sync_form_device_configuration(self) -> None:
+        cleaned = _sanitize_form_device_configuration(
+            platforms=self.platforms,
+            selected_platforms=self.form_device_types,
+            device_quota=self.form_device_quota,
+            default_platform=self.form_default_platform,
+            default_model_tag=self.form_default_model_tag,
+            platform_model_tags=self.platform_model_tags,
+        )
+        self.form_device_types = list(cleaned["device_types"])
+        self.form_device_quota = dict(cleaned["device_quota"])
+        self.form_default_platform = str(cleaned["default_platform"])
+        self.form_default_model_tag = str(cleaned["default_model_tag"])
+
+    def _seed_form_calendar_entries_from_simple(self) -> None:
+        self.form_calendar_entries = _initial_calendar_config_rows(
+            self.form_calendar_id,
+            self.form_calendar_filter,
+        )
+
+    def _sync_first_form_calendar_entry_from_simple(self) -> None:
+        rows = _coerce_calendar_config_rows(self.form_calendar_entries)
+        if not rows:
+            self._seed_form_calendar_entries_from_simple()
+            return
+        rows[0] = {
+            **rows[0],
+            "calendar_id": self.form_calendar_id,
+            "filter": self.form_calendar_filter,
+        }
+        self.form_calendar_entries = rows
 
     def _clear_gate_error(self, target: str) -> None:
         self._set_gate_error(target, "")
@@ -1773,22 +2157,39 @@ class NexusState(rx.State):
         ):
             return
         v = self.new_platform.strip()
-        if v and v not in self.platforms:
-            self.platforms = list(self.platforms) + [v]
-            await update_label_list("platforms", list(self.platforms))
-            # Ensure the new platform has an entry in platform_model_tags
-            pmt = dict(self.platform_model_tags)
-            if v not in pmt:
-                pmt[v] = []
-                self.platform_model_tags = pmt
-                await db_update_platform_model_tags(_to_plain_python(pmt))
-            await self._log_admin_action(
-                action="add_platform",
-                summary=f"Added platform '{v}'.",
-                resource_type="settings",
-                resource_label=v,
-                refresh_settings_view=True,
+        if not v:
+            self._set_settings_feedback(
+                "Enter a platform name before adding it.",
+                tone="error",
             )
+            return
+        if v in self.platforms:
+            self._set_settings_feedback(
+                f"Platform '{v}' already exists.",
+                tone="info",
+            )
+            self.new_platform = ""
+            return
+        self.platforms = list(self.platforms) + [v]
+        await update_label_list("platforms", list(self.platforms))
+        # Ensure the new platform has an entry in platform_model_tags
+        pmt = dict(self.platform_model_tags)
+        if v not in pmt:
+            pmt[v] = []
+            self.platform_model_tags = pmt
+            await db_update_platform_model_tags(_to_plain_python(pmt))
+        self._sync_form_device_configuration()
+        self._set_settings_feedback(
+            f"Added platform '{v}'. It is now available in the dashboard and campaign forms.",
+            tone="success",
+        )
+        await self._log_admin_action(
+            action="add_platform",
+            summary=f"Added platform '{v}'.",
+            resource_type="settings",
+            resource_label=v,
+            refresh_settings_view=True,
+        )
         self.new_platform = ""
 
     async def remove_platform(self, label: str):
@@ -1797,6 +2198,23 @@ class NexusState(rx.State):
             message="Admin mode is required to edit platform settings.",
         ):
             return
+        if label not in self.platforms:
+            self._set_settings_feedback(
+                f"Platform '{label}' is no longer available.",
+                tone="info",
+            )
+            return
+        if len(self.platforms) <= 1:
+            self._set_settings_feedback(
+                "Keep at least one platform configured so new campaigns can still be created.",
+                tone="error",
+            )
+            return
+        usage = await get_platform_usage(label)
+        usage_message = _build_platform_usage_message(label, usage)
+        if usage_message:
+            self._set_settings_feedback(usage_message, tone="error")
+            return
         self.platforms = [p for p in self.platforms if p != label]
         await update_label_list("platforms", list(self.platforms))
         # Also remove from platform_model_tags
@@ -1804,6 +2222,11 @@ class NexusState(rx.State):
         pmt.pop(label, None)
         self.platform_model_tags = pmt
         await db_update_platform_model_tags(_to_plain_python(pmt))
+        self._sync_form_device_configuration()
+        self._set_settings_feedback(
+            f"Removed platform '{label}'.",
+            tone="success",
+        )
         await self._log_admin_action(
             action="remove_platform",
             summary=f"Removed platform '{label}'.",
@@ -1837,14 +2260,28 @@ class NexusState(rx.State):
             return
         v = self.model_tag_inputs.get(platform, "").strip()
         if not v:
+            self._set_settings_feedback(
+                f"Enter a model tag before adding one to {platform}.",
+                tone="error",
+            )
             return
         pmt = dict(self.platform_model_tags)
         existing = list(pmt.get(platform, []))
-        if v not in existing:
+        if v in existing:
+            self._set_settings_feedback(
+                f"Model tag '{v}' is already configured for {platform}.",
+                tone="info",
+            )
+        else:
             existing.append(v)
             pmt[platform] = existing
             self.platform_model_tags = pmt
             await db_update_platform_model_tags(_to_plain_python(pmt))
+            self._sync_form_device_configuration()
+            self._set_settings_feedback(
+                f"Added model tag '{v}' to {platform}.",
+                tone="success",
+            )
             await self._log_admin_action(
                 action="add_model_tag",
                 summary=f"Added model tag '{v}' to {platform}.",
@@ -1864,12 +2301,28 @@ class NexusState(rx.State):
             message="Admin mode is required to edit model-tag settings.",
         ):
             return
+        usage = await get_platform_model_tag_usage(platform, tag)
+        usage_message = _build_model_tag_usage_message(platform, tag, usage)
+        if usage_message:
+            self._set_settings_feedback(usage_message, tone="error")
+            return
         pmt = dict(self.platform_model_tags)
         existing = list(pmt.get(platform, []))
+        if tag not in existing:
+            self._set_settings_feedback(
+                f"Model tag '{tag}' is no longer configured for {platform}.",
+                tone="info",
+            )
+            return
         existing = [t for t in existing if t != tag]
         pmt[platform] = existing
         self.platform_model_tags = pmt
         await db_update_platform_model_tags(_to_plain_python(pmt))
+        self._sync_form_device_configuration()
+        self._set_settings_feedback(
+            f"Removed model tag '{tag}' from {platform}.",
+            tone="success",
+        )
         await self._log_admin_action(
             action="remove_model_tag",
             summary=f"Removed model tag '{tag}' from {platform}.",
@@ -3032,9 +3485,87 @@ class NexusState(rx.State):
 
     def set_form_calendar_id(self, v: str):
         self.form_calendar_id = v
+        if self.form_calendar_mode == "simple":
+            self._sync_first_form_calendar_entry_from_simple()
+        self.form_error = ""
 
     def set_form_calendar_filter(self, v: str):
         self.form_calendar_filter = v
+        if self.form_calendar_mode == "simple":
+            self._sync_first_form_calendar_entry_from_simple()
+        self.form_error = ""
+
+    def set_form_calendar_mode(self, mode: str):
+        if mode not in ("simple", "advanced"):
+            return
+        if mode == "advanced":
+            rows = _coerce_calendar_config_rows(self.form_calendar_entries)
+            if not _populated_calendar_config_rows(rows):
+                rows = _initial_calendar_config_rows(
+                    self.form_calendar_id,
+                    self.form_calendar_filter,
+                )
+            self.form_calendar_entries = rows
+        else:
+            populated = _populated_calendar_config_rows(self.form_calendar_entries)
+            if populated:
+                self.form_calendar_id = populated[0]["calendar_id"] or "primary"
+                self.form_calendar_filter = populated[0]["filter"]
+            elif not _coerce_calendar_config_rows(self.form_calendar_entries):
+                self._seed_form_calendar_entries_from_simple()
+        self.form_calendar_mode = mode
+        self.form_error = ""
+
+    def add_form_calendar_entry(self):
+        rows = _coerce_calendar_config_rows(self.form_calendar_entries)
+        if not rows:
+            rows = _initial_calendar_config_rows(
+                self.form_calendar_id,
+                self.form_calendar_filter,
+            )
+        rows.append(_new_calendar_config_row())
+        self.form_calendar_entries = rows
+        self.form_calendar_mode = "advanced"
+        self.form_error = ""
+
+    def remove_form_calendar_entry(self, key: str):
+        rows = [
+            entry
+            for entry in _coerce_calendar_config_rows(self.form_calendar_entries)
+            if entry.get("key", "") != key
+        ]
+        if not rows:
+            rows = [_new_calendar_config_row()]
+        self.form_calendar_entries = rows
+        self.form_error = ""
+
+    def set_form_calendar_entry_id(self, key: str, value: str):
+        rows = _coerce_calendar_config_rows(self.form_calendar_entries)
+        updated: list[dict[str, str]] = []
+        for entry in rows:
+            if entry.get("key", "") == key:
+                updated.append({
+                    **entry,
+                    "calendar_id": value,
+                })
+            else:
+                updated.append(entry)
+        self.form_calendar_entries = updated or [_new_calendar_config_row(calendar_id=value)]
+        self.form_error = ""
+
+    def set_form_calendar_entry_filter(self, key: str, value: str):
+        rows = _coerce_calendar_config_rows(self.form_calendar_entries)
+        updated: list[dict[str, str]] = []
+        for entry in rows:
+            if entry.get("key", "") == key:
+                updated.append({
+                    **entry,
+                    "filter": value,
+                })
+            else:
+                updated.append(entry)
+        self.form_calendar_entries = updated or [_new_calendar_config_row(keyword_filter=value)]
+        self.form_error = ""
 
     def set_form_notion_url(self, v: str):
         self.form_notion_url = v
@@ -3053,27 +3584,40 @@ class NexusState(rx.State):
         else:
             current.append(v)
         self.form_device_types = current
+        self._sync_form_device_configuration()
+        self.form_error = ""
 
     def set_form_default_platform(self, v: str):
-        # Convert sentinel "__none__" back to empty string
-        self.form_default_platform = "" if v == "__none__" else v
+        self.form_default_platform = "" if v == FORM_NONE_OPTION_LABEL else v
+        self._sync_form_device_configuration()
+        self.form_error = ""
 
     def set_form_default_model_tag(self, v: str):
-        # Convert sentinel "__none__" back to empty string
-        self.form_default_model_tag = "" if v == "__none__" else v
+        self.form_default_model_tag = "" if v == FORM_NONE_OPTION_LABEL else v
+        self._sync_form_device_configuration()
+        self.form_error = ""
 
     def set_form_device_quota_value(self, key_value: str):
         """Set a single device quota entry. Format: 'device_name:quota_int'."""
         parts = key_value.split(":", 1)
         if len(parts) == 2:
             device = parts[0].strip()
+            if device not in self.form_selected_platforms:
+                return
+            raw_value = parts[1].strip()
+            new_quota = dict(self.form_device_quota)
+            if raw_value == "":
+                new_quota.pop(device, None)
+                self.form_device_quota = new_quota
+                self._sync_form_device_configuration()
+                return
             try:
-                quota = max(0, int(parts[1].strip()))
+                quota = max(0, int(raw_value))
             except (ValueError, TypeError):
                 return
-            new_quota = dict(self.form_device_quota)
             new_quota[device] = quota
             self.form_device_quota = new_quota
+            self._sync_form_device_configuration()
 
     def clear_form(self):
         self.form_name = ""
@@ -3085,6 +3629,8 @@ class NexusState(rx.State):
         self.form_goal = "100"
         self.form_calendar_id = "primary"
         self.form_calendar_filter = ""
+        self.form_calendar_mode = "simple"
+        self.form_calendar_entries = _initial_calendar_config_rows("primary", "")
         self.form_error = ""
         self.form_is_edit = False
         self.form_edit_campaign_id = ""
@@ -3110,27 +3656,53 @@ class NexusState(rx.State):
         self.form_linear_url = campaign.get("linear_url", "")
         self.form_deadline = campaign.get("deadline", "")
         self.form_goal = str(campaign.get("goal", 100))
-        self.form_calendar_id = campaign.get("calendar_id", "primary")
+        self.form_calendar_id = campaign.get("calendar_id", "primary") or "primary"
         self.form_calendar_filter = campaign.get("calendar_filter", "")
+        advanced_rows = _populated_calendar_config_rows(
+            campaign.get("calendar_ids", []),
+        )
+        if len(advanced_rows) > 1:
+            self.form_calendar_mode = "advanced"
+            self.form_calendar_entries = [
+                _new_calendar_config_row(
+                    row["calendar_id"],
+                    row["filter"],
+                )
+                for row in advanced_rows
+            ]
+        else:
+            if advanced_rows:
+                self.form_calendar_id = advanced_rows[0]["calendar_id"] or "primary"
+                self.form_calendar_filter = advanced_rows[0]["filter"]
+            self.form_calendar_mode = "simple"
+            self._seed_form_calendar_entries_from_simple()
         self.form_device_types = campaign.get("device_types", [])
         self.form_device_quota = campaign.get("device_quota", {})
         self.form_default_platform = campaign.get("default_platform", "")
         self.form_default_model_tag = campaign.get("default_model_tag", "")
+        self._sync_form_device_configuration()
         self.form_error = ""
 
-    async def create_campaign(self):
-        if not self._require_admin(
-            target="form",
-            message="Admin mode is required to create campaigns.",
-        ):
-            return
+    def _build_campaign_form_payload(self) -> dict[str, object] | None:
+        self.form_error = ""
         if not self.form_name.strip():
             self.form_error = "Campaign name is required."
-            return
+            return None
+        self._sync_form_device_configuration()
         if not self.form_device_types:
             self.form_error = "At least one platform must be selected."
-            return
-        cid = await db_create_campaign({
+            return None
+        try:
+            calendar_payload = _build_campaign_calendar_payload(
+                mode=self.form_calendar_mode,
+                calendar_id=self.form_calendar_id,
+                calendar_filter=self.form_calendar_filter,
+                calendar_entries=self.form_calendar_entries,
+            )
+        except ValueError as exc:
+            self.form_error = str(exc)
+            return None
+        return {
             "name": self.form_name.strip(),
             "description": self.form_description.strip(),
             "booking_url": self.form_booking_url.strip(),
@@ -3138,13 +3710,23 @@ class NexusState(rx.State):
             "linear_url": self.form_linear_url.strip(),
             "deadline": self.form_deadline.strip(),
             "goal": self.form_goal.strip() or "100",
-            "calendar_id": self.form_calendar_id.strip() or "primary",
-            "calendar_filter": self.form_calendar_filter.strip(),
             "device_types": list(self.form_device_types),
             "device_quota": dict(self.form_device_quota),
             "default_platform": self.form_default_platform,
             "default_model_tag": self.form_default_model_tag,
-        })
+            **calendar_payload,
+        }
+
+    async def create_campaign(self):
+        if not self._require_admin(
+            target="form",
+            message="Admin mode is required to create campaigns.",
+        ):
+            return
+        payload = self._build_campaign_form_payload()
+        if payload is None:
+            return
+        cid = await db_create_campaign(payload)
         await self._log_admin_action(
             action="create_campaign",
             summary=f"Created campaign '{self.form_name.strip()}'.",
@@ -3161,30 +3743,13 @@ class NexusState(rx.State):
             message="Admin mode is required to edit campaigns.",
         ):
             return
-        if not self.form_name.strip():
-            self.form_error = "Campaign name is required."
-            return
-        if not self.form_device_types:
-            self.form_error = "At least one platform must be selected."
-            return
         cid = self.form_edit_campaign_id
         if not cid:
             return
-        await db_update_campaign(cid, {
-            "name": self.form_name.strip(),
-            "description": self.form_description.strip(),
-            "booking_url": self.form_booking_url.strip(),
-            "notion_url": self.form_notion_url.strip(),
-            "linear_url": self.form_linear_url.strip(),
-            "deadline": self.form_deadline.strip(),
-            "goal": self.form_goal.strip() or "100",
-            "calendar_id": self.form_calendar_id.strip() or "primary",
-            "calendar_filter": self.form_calendar_filter.strip(),
-            "device_types": list(self.form_device_types),
-            "device_quota": dict(self.form_device_quota),
-            "default_platform": self.form_default_platform,
-            "default_model_tag": self.form_default_model_tag,
-        })
+        payload = self._build_campaign_form_payload()
+        if payload is None:
+            return
+        await db_update_campaign(cid, payload)
         await self._log_admin_action(
             action="update_campaign",
             summary=f"Updated campaign '{self.form_name.strip()}'.",

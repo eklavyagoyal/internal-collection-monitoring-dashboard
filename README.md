@@ -33,9 +33,9 @@ Built with **Reflex** (Python → React + FastAPI), **MongoDB** (async via Motor
 ### Calendar Integration
 | Feature | Detail |
 |---|---|
-| **Multi-Calendar Support** | Each campaign targets its own Calendar ID |
+| **Multi-Calendar Support** | Campaign forms keep a simple single-calendar path by default and can switch to Advanced mode for multiple calendar sources |
 | **Keyword Filter** | Only import events whose title matches a keyword (e.g. "Worldcoin") |
-| **Calendar Discovery** | Settings page lists all accessible calendars with one-click ID copy |
+| **Calendar Discovery** | Settings plus create/edit forms can list accessible calendars with one-click ID copy |
 | **Booking Tool Support** | Calendly / Cal.com / Acuity events sync automatically via Google Calendar |
 
 ### Platform
@@ -45,7 +45,7 @@ Built with **Reflex** (Python → React + FastAPI), **MongoDB** (async via Motor
 | **Freshness Signals** | Navbar + campaign cards distinguish live refresh, stale syncs, failed attempts, and never-synced campaigns |
 | **Date Navigation** | Visible `Previous / Today / Next` day context on dashboard and campaign detail pages |
 | **Dark / Light Mode** | Toggle with a single click |
-| **Configurable Labels** | Add/remove platforms and model tags from Settings — no redeploy needed |
+| **Configurable Labels** | Add/remove platforms and model tags from Settings with usage-aware safety checks — no redeploy needed |
 | **Admin Safety Rails** | Admin PIN gates campaign/settings mutations and protected actions write lightweight audit events |
 
 ---
@@ -215,6 +215,7 @@ All colours, shadows, radii, and component helpers live in `components/design_to
 - Campaign creation, campaign editing, campaign deletion, bulk deletion, and settings mutation are gated behind admin mode
 - Admin PINs are stored with PBKDF2 hashing instead of raw SHA-256
 - Protected changes write lightweight audit events for visibility on the Settings page
+- Settings now block deleting platforms or model tags that are still referenced by campaigns or participant rows
 
 ### Campaign Progress
 - Overall campaign progress is based on **unique participants** across the full campaign
@@ -229,6 +230,8 @@ All colours, shadows, radii, and component helpers live in `components/design_to
 - Row-level platform, model, status, notes, and issue updates save optimistically and show lightweight save feedback
 - Issue comments are distinct from routine notes and stay included in CSV exports
 - Changing the selected day clears old date-scoped sync banners so the page never looks fresher than the current view really is
+- Create/edit forms keep single-calendar setup as the default path, with an Advanced multi-calendar mode when one campaign needs multiple sources
+- Default platform and model-tag choices are constrained to the selected campaign platforms and their configured model tags
 
 ---
 

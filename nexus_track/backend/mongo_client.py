@@ -25,7 +25,6 @@ _client: AsyncIOMotorClient | None = None
 # Default label sets shipped with a fresh install.
 DEFAULT_PLATFORMS = ["Orb", "Kiosk-v1", "Kiosk-v2", "Self-Serve", "Other"]
 DEFAULT_MODEL_TAGS = ["v4.5", "v4.6", "v5.0", "beta"]
-DEFAULT_DEVICE_TYPES = ["iOS", "Android", "Orb"]
 FIXED_PARTICIPANT_STATUSES = ("Booked", "Completed")
 PIN_HASH_ALGO = "pbkdf2_sha256"
 PIN_HASH_ITERATIONS = 390_000
@@ -229,6 +228,43 @@ async def get_recent_audit_events(limit: int = 10) -> list[dict]:
         doc["_id"] = str(doc["_id"])
         out.append(doc)
     return out
+
+
+async def get_platform_usage(label: str) -> dict[str, int]:
+    """Return usage counts that make removing a platform unsafe."""
+    return {
+        "campaign_device_type_count": await _campaigns().count_documents(
+            {"device_types": label},
+        ),
+        "campaign_default_count": await _campaigns().count_documents(
+            {"default_platform": label},
+        ),
+        "participant_count": await _participants().count_documents(
+            {"platform": label},
+        ),
+    }
+
+
+async def get_platform_model_tag_usage(
+    platform: str,
+    tag: str,
+) -> dict[str, int]:
+    """Return usage counts that make removing a platform/model mapping unsafe."""
+    return {
+        "participant_count": await _participants().count_documents(
+            {"platform": platform, "model_tag": tag},
+        ),
+        "campaign_default_count": await _campaigns().count_documents(
+            {"default_platform": platform, "default_model_tag": tag},
+        ),
+        "campaign_shared_default_count": await _campaigns().count_documents(
+            {
+                "default_platform": "",
+                "default_model_tag": tag,
+                "device_types": platform,
+            },
+        ),
+    }
 
 
 # =========================================================================

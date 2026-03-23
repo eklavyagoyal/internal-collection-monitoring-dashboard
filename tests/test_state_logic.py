@@ -11,10 +11,14 @@ from datetime import datetime
 
 from nexus_track.state import (
     _build_app_refresh_health,
+    _build_campaign_calendar_payload,
     _build_campaign_sync_health,
     _build_export_filename,
+    _build_model_tag_usage_message,
+    _build_platform_usage_message,
     _build_range_sync_result_message,
     _build_sync_result_message,
+    _available_model_tags_for_form,
     _compute_campaign_progress_from_participants,
     _compute_per_device_progress_from_participants,
     _compute_platform_model_breakdown_from_participants,
@@ -28,6 +32,7 @@ from nexus_track.state import (
     _participant_empty_state,
     _participants_for_scope,
     _resolve_sync_error,
+    _sanitize_form_device_configuration,
 )
 
 
@@ -452,6 +457,139 @@ class TestSelectionScopeHelpers:
         )
 
         assert scoped == participants
+
+
+class TestCampaignFormHelpers:
+    def test_available_model_tags_follow_selected_platforms_in_config_order(self):
+        tags = _available_model_tags_for_form(
+            {
+                "Orb": ["v5.0", "beta"],
+                "Kiosk-v2": ["beta", "v4.6"],
+            },
+            ["Orb", "Kiosk-v2"],
+            "",
+        )
+
+        assert tags == ["v5.0", "beta", "v4.6"]
+
+    def test_available_model_tags_lock_to_default_platform_when_selected(self):
+        tags = _available_model_tags_for_form(
+            {
+                "Orb": ["v5.0", "beta"],
+                "Kiosk-v2": ["beta", "v4.6"],
+            },
+            ["Orb", "Kiosk-v2"],
+            "Kiosk-v2",
+        )
+
+        assert tags == ["beta", "v4.6"]
+
+    def test_sanitize_form_device_configuration_prunes_invalid_defaults_and_quotas(self):
+        cleaned = _sanitize_form_device_configuration(
+            platforms=["Orb", "Kiosk-v2", "Other"],
+            selected_platforms=["Kiosk-v2", "Orb"],
+            device_quota={"Orb": "12", "Other": "4", "Kiosk-v2": ""},
+            default_platform="Other",
+            default_model_tag="beta",
+            platform_model_tags={
+                "Orb": ["v5.0"],
+                "Kiosk-v2": ["v4.6"],
+                "Other": ["beta"],
+            },
+        )
+
+        assert cleaned["device_types"] == ["Orb", "Kiosk-v2"]
+        assert cleaned["device_quota"] == {"Orb": 12}
+        assert cleaned["default_platform"] == ""
+        assert cleaned["default_model_tag"] == ""
+
+    def test_build_campaign_calendar_payload_simple_uses_legacy_fields_only(self):
+        payload = _build_campaign_calendar_payload(
+            mode="simple",
+            calendar_id="primary",
+            calendar_filter="Worldcoin",
+            calendar_entries=[
+                {"calendar_id": "team@example.com", "filter": "Other"},
+            ],
+        )
+
+        assert payload == {
+            "calendar_id": "primary",
+            "calendar_filter": "Worldcoin",
+            "calendar_ids": [],
+        }
+
+    def test_build_campaign_calendar_payload_advanced_uses_all_rows_and_first_row_as_primary(self):
+        payload = _build_campaign_calendar_payload(
+            mode="advanced",
+            calendar_id="primary",
+            calendar_filter="",
+            calendar_entries=[
+                {"calendar_id": "primary", "filter": "Worldcoin"},
+                {"calendar_id": "ops@example.com", "filter": "Berlin"},
+            ],
+        )
+
+        assert payload == {
+            "calendar_id": "primary",
+            "calendar_filter": "Worldcoin",
+            "calendar_ids": [
+                {"calendar_id": "primary", "filter": "Worldcoin"},
+                {"calendar_id": "ops@example.com", "filter": "Berlin"},
+            ],
+        }
+
+    def test_build_campaign_calendar_payload_rejects_duplicate_calendar_ids(self):
+        with pytest.raises(ValueError):
+            _build_campaign_calendar_payload(
+                mode="advanced",
+                calendar_id="primary",
+                calendar_filter="",
+                calendar_entries=[
+                    {"calendar_id": "primary", "filter": ""},
+                    {"calendar_id": "PRIMARY", "filter": "duplicate"},
+                ],
+            )
+
+    def test_build_campaign_calendar_payload_requires_calendar_id_when_filter_present(self):
+        with pytest.raises(ValueError):
+            _build_campaign_calendar_payload(
+                mode="advanced",
+                calendar_id="primary",
+                calendar_filter="",
+                calendar_entries=[
+                    {"calendar_id": "", "filter": "Worldcoin"},
+                ],
+            )
+
+    def test_platform_usage_message_lists_all_blockers(self):
+        message = _build_platform_usage_message(
+            "Orb",
+            {
+                "participant_count": 3,
+                "campaign_device_type_count": 2,
+                "campaign_default_count": 1,
+            },
+        )
+
+        assert "participant row(s)" in message
+        assert "campaign platform selection(s)" in message
+        assert "campaign default(s)" in message
+
+    def test_model_tag_usage_message_lists_shared_defaults(self):
+        message = _build_model_tag_usage_message(
+            "Orb",
+            "beta",
+            {
+                "participant_count": 2,
+                "campaign_default_count": 1,
+                "campaign_shared_default_count": 4,
+            },
+        )
+
+        assert "participant row(s)" in message
+        assert "campaign default(s)" in message
+        assert "shared campaign default(s)" in message
 
 
 class TestIssueHelpers:

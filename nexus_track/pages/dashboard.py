@@ -340,9 +340,10 @@ def dashboard_page() -> rx.Component:
             # -- Device filter chips + sort selector
             rx.hstack(
                 _device_chip("All", ""),
-                _device_chip("iOS", "iOS"),
-                _device_chip("Android", "Android"),
-                _device_chip("Orb", "Orb"),
+                rx.foreach(
+                    NexusState.platforms,
+                    lambda platform: _device_chip(platform, platform),
+                ),
                 rx.spacer(),
                 rx.select(
                     ["created_at", "name", "device_type", "progress"],

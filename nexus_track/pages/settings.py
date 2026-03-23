@@ -87,6 +87,36 @@ def _admin_only_hint(message: str) -> rx.Component:
     )
 
 
+def _settings_feedback_banner() -> rx.Component:
+    return rx.cond(
+        NexusState.settings_feedback_tone == "success",
+        rx.callout(
+            NexusState.settings_feedback,
+            icon="circle-check-big",
+            color_scheme="green",
+            border_radius=RADIUS_MD,
+            margin_bottom="16px",
+        ),
+        rx.cond(
+            NexusState.settings_feedback_tone == "error",
+            rx.callout(
+                NexusState.settings_feedback,
+                icon="triangle-alert",
+                color_scheme="red",
+                border_radius=RADIUS_MD,
+                margin_bottom="16px",
+            ),
+            rx.callout(
+                NexusState.settings_feedback,
+                icon="info",
+                color_scheme="blue",
+                border_radius=RADIUS_MD,
+                margin_bottom="16px",
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Reusable: label section (title + chips + add input)
 # ---------------------------------------------------------------------------
@@ -398,7 +428,7 @@ def _model_tags_per_platform_section() -> rx.Component:
         section_header(
             "tag",
             "Model Tags",
-            "Device models grouped by platform. E.g. iOS → iPhone 11, iPhone 12...",
+            "Configured model tags grouped by platform so each campaign only sees valid options.",
         ),
         rx.vstack(
             rx.foreach(
@@ -528,6 +558,10 @@ def settings_page() -> rx.Component:
                 border_radius=RADIUS_MD,
                 margin_bottom="16px",
             ),
+        ),
+        rx.cond(
+            NexusState.settings_feedback != "",
+            _settings_feedback_banner(),
         ),
         # -- 2-column grid for label editors
         rx.grid(

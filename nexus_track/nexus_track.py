@@ -111,11 +111,11 @@ app.add_page(
     new_campaign_page,
     route="/new",
     title="New Campaign · Nexus-Track",
-    on_load=NexusState.clear_form,
+    on_load=NexusState.prepare_new_campaign_form,
 )
 app.add_page(
     settings_page,
     route="/settings",
     title="Settings · Nexus-Track",
-    on_load=[NexusState.load_settings, NexusState.load_recent_admin_actions],
+    on_load=NexusState.prepare_settings_page,
 )

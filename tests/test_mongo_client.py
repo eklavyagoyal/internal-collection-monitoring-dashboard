@@ -425,6 +425,57 @@ class TestAdminAuditLog:
         assert [event["action"] for event in events] == ["newer", "older"]
 
 
+class TestSettingsUsageGuards:
+    @pytest.mark.asyncio
+    async def test_get_platform_usage_counts_campaigns_and_participants(self):
+        cid = await mc.create_campaign({
+            "name": "Usage1",
+            "device_types": ["Orb", "Kiosk-v2"],
+            "default_platform": "Orb",
+        })
+        await mc.upsert_participant(
+            cid, "usage-p1", "Alex", "alex@test.com", "10:00", "2026-03-23",
+        )
+        await mc.update_participant_field(cid, "usage-p1", "platform", "Orb")
+
+        usage = await mc.get_platform_usage("Orb")
+
+        assert usage == {
+            "campaign_device_type_count": 1,
+            "campaign_default_count": 1,
+            "participant_count": 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_platform_model_tag_usage_counts_exact_and_shared_defaults(self):
+        exact_cid = await mc.create_campaign({
+            "name": "Usage2",
+            "device_types": ["Orb"],
+            "default_platform": "Orb",
+            "default_model_tag": "beta",
+        })
+        shared_cid = await mc.create_campaign({
+            "name": "Usage3",
+            "device_types": ["Orb", "Kiosk-v2"],
+            "default_platform": "",
+            "default_model_tag": "beta",
+        })
+        await mc.upsert_participant(
+            exact_cid, "usage-p2", "Blake", "blake@test.com", "11:00", "2026-03-23",
+        )
+        await mc.update_participant_field(exact_cid, "usage-p2", "platform", "Orb")
+        await mc.update_participant_field(exact_cid, "usage-p2", "model_tag", "beta")
+
+        usage = await mc.get_platform_model_tag_usage("Orb", "beta")
+
+        assert usage == {
+            "participant_count": 1,
+            "campaign_default_count": 1,
+            "campaign_shared_default_count": 1,
+        }
+        assert shared_cid != exact_cid
+
+
 class TestSyncedDates:
     @pytest.mark.asyncio
     async def test_get_synced_dates(self):
