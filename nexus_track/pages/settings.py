@@ -43,14 +43,18 @@ def _label_chip(label: rx.Var[str], on_remove) -> rx.Component:
                 weight="medium",
                 color=HEADING,
             ),
-            rx.icon_button(
-                rx.icon("x", size=12),
-                size="1",
-                variant="ghost",
-                color_scheme="red",
-                on_click=on_remove(label),
-                cursor="pointer",
-                border_radius="50%",
+            rx.cond(
+                NexusState.admin_mode,
+                rx.icon_button(
+                    rx.icon("x", size=12),
+                    size="1",
+                    variant="ghost",
+                    color_scheme="red",
+                    on_click=on_remove(label),
+                    cursor="pointer",
+                    border_radius="50%",
+                ),
+                rx.fragment(),
             ),
             spacing="2",
             align="center",
@@ -67,6 +71,19 @@ def _label_chip(label: rx.Var[str], on_remove) -> rx.Component:
                 light="rgba(99,102,241,0.4)", dark="rgba(167,139,250,0.4)"
             ),
         },
+    )
+
+
+def _admin_only_hint(message: str) -> rx.Component:
+    return rx.hstack(
+        rx.icon("lock", size=14, color=AMBER),
+        rx.text(message, size="1", color=SUBTEXT),
+        spacing="2",
+        align="center",
+        padding="10px 12px",
+        border_radius=RADIUS_MD,
+        background=AMBER_SOFT,
+        width="100%",
     )
 
 
@@ -97,30 +114,35 @@ def _label_section(
             gap="8px",
             margin_bottom="16px",
         ),
-        # Add input row
-        rx.hstack(
-            rx.input(
-                placeholder="Add new " + title.lower().rstrip("s") + "...",
-                value=new_value,
-                on_change=set_new,
-                on_key_down=key_down_fn,
-                size="2",
-                variant="surface",
-                border_radius=RADIUS_MD,
-                flex="1",
+        rx.cond(
+            NexusState.admin_mode,
+            rx.hstack(
+                rx.input(
+                    placeholder="Add new " + title.lower().rstrip("s") + "...",
+                    value=new_value,
+                    on_change=set_new,
+                    on_key_down=key_down_fn,
+                    size="2",
+                    variant="surface",
+                    border_radius=RADIUS_MD,
+                    flex="1",
+                ),
+                rx.button(
+                    rx.icon("plus", size=16),
+                    "Add",
+                    size="2",
+                    variant="soft",
+                    color_scheme="iris",
+                    border_radius=RADIUS_MD,
+                    on_click=add_fn(),
+                    cursor="pointer",
+                ),
+                spacing="2",
+                width="100%",
             ),
-            rx.button(
-                rx.icon("plus", size=16),
-                "Add",
-                size="2",
-                variant="soft",
-                color_scheme="iris",
-                border_radius=RADIUS_MD,
-                on_click=add_fn(),
-                cursor="pointer",
+            _admin_only_hint(
+                "Unlock admin mode to add or remove settings in this section.",
             ),
-            spacing="2",
-            width="100%",
         ),
     )
 
@@ -296,14 +318,18 @@ def _model_tag_chip(platform: rx.Var[str], tag: rx.Var[str]) -> rx.Component:
     return rx.box(
         rx.hstack(
             rx.text(tag, size="1", weight="medium", color=HEADING),
-            rx.icon_button(
-                rx.icon("x", size=10),
-                size="1",
-                variant="ghost",
-                color_scheme="red",
-                on_click=NexusState.remove_platform_model_tag(platform, tag),
-                cursor="pointer",
-                border_radius="50%",
+            rx.cond(
+                NexusState.admin_mode,
+                rx.icon_button(
+                    rx.icon("x", size=10),
+                    size="1",
+                    variant="ghost",
+                    color_scheme="red",
+                    on_click=NexusState.remove_platform_model_tag(platform, tag),
+                    cursor="pointer",
+                    border_radius="50%",
+                ),
+                rx.fragment(),
             ),
             spacing="1",
             align="center",
@@ -329,29 +355,35 @@ def _platform_model_tags_row(config) -> rx.Component:
             wrap="wrap",
             gap="6px",
         ),
-        rx.hstack(
-            rx.input(
-                placeholder="Add model tag...",
-                value=config.input_value,
-                on_change=lambda v: NexusState.set_model_tag_input_for(platform, v),
-                on_key_down=lambda key: NexusState.handle_model_tag_key_down(platform, key),
-                size="1",
-                variant="surface",
-                border_radius=RADIUS_SM,
-                flex="1",
+        rx.cond(
+            NexusState.admin_mode,
+            rx.hstack(
+                rx.input(
+                    placeholder="Add model tag...",
+                    value=config.input_value,
+                    on_change=lambda v: NexusState.set_model_tag_input_for(platform, v),
+                    on_key_down=lambda key: NexusState.handle_model_tag_key_down(platform, key),
+                    size="1",
+                    variant="surface",
+                    border_radius=RADIUS_SM,
+                    flex="1",
+                ),
+                rx.button(
+                    rx.icon("plus", size=14),
+                    "Add",
+                    size="1",
+                    variant="soft",
+                    color_scheme="iris",
+                    border_radius=RADIUS_SM,
+                    on_click=NexusState.add_platform_model_tag(platform),
+                    cursor="pointer",
+                ),
+                spacing="2",
+                width="100%",
             ),
-            rx.button(
-                rx.icon("plus", size=14),
-                "Add",
-                size="1",
-                variant="soft",
-                color_scheme="iris",
-                border_radius=RADIUS_SM,
-                on_click=NexusState.add_platform_model_tag(platform),
-                cursor="pointer",
+            _admin_only_hint(
+                "Unlock admin mode to change model tags for this platform.",
             ),
-            spacing="2",
-            width="100%",
         ),
         spacing="2",
         width="100%",
@@ -375,6 +407,81 @@ def _model_tags_per_platform_section() -> rx.Component:
             ),
             spacing="3",
             width="100%",
+        ),
+    )
+
+
+def _recent_admin_action_row(event) -> rx.Component:
+    return rx.hstack(
+        rx.vstack(
+            rx.text(
+                event.summary,
+                size="2",
+                weight="medium",
+                color=HEADING,
+            ),
+            rx.text(
+                event.action,
+                size="1",
+                color=SUBTEXT,
+            ),
+            spacing="0",
+            align="start",
+            flex="1",
+            min_width="0",
+        ),
+        rx.text(
+            event.timestamp,
+            size="1",
+            color=SUBTEXT,
+            white_space="nowrap",
+        ),
+        spacing="3",
+        align="start",
+        width="100%",
+        padding="12px",
+        border_radius=RADIUS_MD,
+        background=CARD_BG,
+        border=BORDER,
+    )
+
+
+def _recent_admin_actions_section() -> rx.Component:
+    return glass_card(
+        section_header(
+            "history",
+            "Recent Admin Actions",
+            "A lightweight audit trail for protected changes.",
+        ),
+        rx.text(
+            "Admin PINs are stored with slow salted hashing, and this session locks for 1 minute after 5 incorrect attempts.",
+            size="2",
+            color=TEXT,
+            line_height="1.6",
+            margin_bottom="16px",
+        ),
+        rx.cond(
+            NexusState.admin_mode,
+            rx.cond(
+                NexusState.recent_admin_actions.length() > 0,
+                rx.vstack(
+                    rx.foreach(
+                        NexusState.recent_admin_actions,
+                        _recent_admin_action_row,
+                    ),
+                    spacing="2",
+                    width="100%",
+                ),
+                rx.text(
+                    "No admin actions have been recorded yet.",
+                    size="2",
+                    color=SUBTEXT,
+                    font_style="italic",
+                ),
+            ),
+            _admin_only_hint(
+                "Unlock admin mode to review recent protected actions.",
+            ),
         ),
     )
 
@@ -412,6 +519,16 @@ def settings_page() -> rx.Component:
             align="center",
             margin_bottom="32px",
         ),
+        rx.cond(
+            ~NexusState.admin_mode,
+            rx.callout(
+                "Platform, model-tag, and campaign-management changes stay locked until admin mode is enabled.",
+                icon="lock",
+                color_scheme="amber",
+                border_radius=RADIUS_MD,
+                margin_bottom="16px",
+            ),
+        ),
         # -- 2-column grid for label editors
         rx.grid(
             _label_section(
@@ -447,6 +564,11 @@ def settings_page() -> rx.Component:
             margin_top="16px",
             width="100%",
         ),
+        rx.box(
+            _recent_admin_actions_section(),
+            margin_top="16px",
+            width="100%",
+        ),
         # -- Admin PIN section
         glass_card(
             section_header(
@@ -457,6 +579,10 @@ def settings_page() -> rx.Component:
             rx.cond(
                 NexusState.admin_mode,
                 rx.vstack(
+                    rx.cond(
+                        NexusState.admin_error != "",
+                        rx.text(NexusState.admin_error, size="2", color=RED),
+                    ),
                     rx.hstack(
                         rx.badge("Admin Mode Active", color_scheme="green", size="2"),
                         rx.button(
@@ -496,6 +622,12 @@ def settings_page() -> rx.Component:
                         ),
                         spacing="2",
                         align="center",
+                    ),
+                    rx.text(
+                        "Sensitive changes are now protected. Campaign creation, editing, status changes, and destructive deletes require this mode.",
+                        size="1",
+                        color=SUBTEXT,
+                        line_height="1.6",
                     ),
                     spacing="3",
                 ),
@@ -539,6 +671,11 @@ def settings_page() -> rx.Component:
                             "No PIN set yet. Enter any PIN to login for the first time, then set one in admin mode.",
                             size="1", color=AMBER,
                         ),
+                    ),
+                    rx.text(
+                        "After 5 incorrect attempts, admin login locks for 1 minute.",
+                        size="1",
+                        color=SUBTEXT,
                     ),
                     spacing="2",
                 ),

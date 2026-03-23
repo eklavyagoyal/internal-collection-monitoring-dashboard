@@ -7,7 +7,6 @@ multi-calendar support, sorting, bulk actions, search, archive,
 manual participant add, and CSV export.
 """
 
-import hashlib
 import asyncio
 import csv
 import io
@@ -30,6 +29,7 @@ from .backend.mongo_client import (
     ensure_indexes,
     get_admin_pin_hash,
     get_all_campaigns_with_stats,
+    get_recent_audit_events,
     get_campaign,
     get_campaign_progress,
     get_participants_for_campaign,
@@ -37,6 +37,8 @@ from .backend.mongo_client import (
     get_per_device_progress,
     get_platform_model_breakdown,
     get_settings,
+    hash_admin_pin as db_hash_admin_pin,
+    record_audit_event as db_record_audit_event,
     set_admin_pin as db_set_admin_pin,
     update_campaign as db_update_campaign,
     update_campaign_field as db_update_campaign_field,
@@ -44,6 +46,7 @@ from .backend.mongo_client import (
     update_participant_field as db_update_field,
     update_participant_status as db_update_status,
     update_platform_model_tags as db_update_platform_model_tags,
+    verify_admin_pin as db_verify_admin_pin,
 )
 
 log = logging.getLogger(__name__)
@@ -103,6 +106,13 @@ class PlatformOption(rx.Base):
     selected: bool = False
 
 
+class AuditEvent(rx.Base):
+    timestamp: str = ""
+    summary: str = ""
+    action: str = ""
+    resource_label: str = ""
+
+
 class NexusState(rx.State):
     """Single state class for the entire multi-page app."""
 
@@ -123,6 +133,9 @@ class NexusState(rx.State):
     admin_error: str = ""
     has_admin_pin: bool = False
     new_admin_pin: str = ""
+    admin_login_attempts: int = 0
+    admin_lockout_until: str = ""
+    recent_admin_actions: list[AuditEvent] = []
 
     # LOADING STATE
     is_loading: bool = False
@@ -179,6 +192,7 @@ class NexusState(rx.State):
     is_syncing: bool = False
     last_sync_time: str = ""
     sync_error: str = ""
+    detail_error: str = ""
 
     # CAMPAIGN FORM
     form_name: str = ""
@@ -669,6 +683,64 @@ class NexusState(rx.State):
         self.has_admin_pin = bool(doc.get("admin_pin_hash", ""))
         self.platform_model_tags = doc.get("platform_model_tags", {})
 
+    async def load_recent_admin_actions(self):
+        rows = await get_recent_audit_events(limit=8)
+        events: list[AuditEvent] = []
+        for row in rows:
+            raw = row.get("created_at", "")
+            timestamp = raw
+            try:
+                timestamp = datetime.fromisoformat(raw).strftime("%b %d, %H:%M")
+            except Exception:
+                pass
+            events.append(AuditEvent(
+                timestamp=timestamp,
+                summary=row.get("summary", ""),
+                action=row.get("action", ""),
+                resource_label=row.get("resource_label", ""),
+            ))
+        self.recent_admin_actions = events
+
+    def _clear_gate_error(self, target: str) -> None:
+        self._set_gate_error(target, "")
+
+    def _set_gate_error(self, target: str, message: str) -> None:
+        if target == "form":
+            self.form_error = message
+        elif target == "detail":
+            self.detail_error = message
+        else:
+            self.admin_error = message
+
+    def _require_admin(self, *, target: str, message: str) -> bool:
+        if self.admin_mode:
+            self._clear_gate_error(target)
+            return True
+        self._set_gate_error(target, message)
+        return False
+
+    async def _log_admin_action(
+        self,
+        *,
+        action: str,
+        summary: str,
+        resource_type: str = "",
+        resource_id: str = "",
+        resource_label: str = "",
+        metadata: dict | None = None,
+        refresh_settings_view: bool = False,
+    ) -> None:
+        await db_record_audit_event(
+            action=action,
+            summary=summary,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            resource_label=resource_label,
+            metadata=metadata,
+        )
+        if refresh_settings_view:
+            await self.load_recent_admin_actions()
+
     def set_new_platform(self, v: str):
         self.new_platform = v
 
@@ -677,6 +749,11 @@ class NexusState(rx.State):
             await self.add_platform()
 
     async def add_platform(self):
+        if not self._require_admin(
+            target="admin",
+            message="Admin mode is required to edit platform settings.",
+        ):
+            return
         v = self.new_platform.strip()
         if v and v not in self.platforms:
             self.platforms = list(self.platforms) + [v]
@@ -687,9 +764,21 @@ class NexusState(rx.State):
                 pmt[v] = []
                 self.platform_model_tags = pmt
                 await db_update_platform_model_tags(_to_plain_python(pmt))
+            await self._log_admin_action(
+                action="add_platform",
+                summary=f"Added platform '{v}'.",
+                resource_type="settings",
+                resource_label=v,
+                refresh_settings_view=True,
+            )
         self.new_platform = ""
 
     async def remove_platform(self, label: str):
+        if not self._require_admin(
+            target="admin",
+            message="Admin mode is required to edit platform settings.",
+        ):
+            return
         self.platforms = [p for p in self.platforms if p != label]
         await update_label_list("platforms", list(self.platforms))
         # Also remove from platform_model_tags
@@ -697,6 +786,13 @@ class NexusState(rx.State):
         pmt.pop(label, None)
         self.platform_model_tags = pmt
         await db_update_platform_model_tags(_to_plain_python(pmt))
+        await self._log_admin_action(
+            action="remove_platform",
+            summary=f"Removed platform '{label}'.",
+            resource_type="settings",
+            resource_label=label,
+            refresh_settings_view=True,
+        )
 
     def set_new_model_tag(self, v: str):
         self.new_model_tag = v
@@ -716,6 +812,11 @@ class NexusState(rx.State):
 
     async def add_platform_model_tag(self, platform: str):
         """Add a model tag under a specific platform."""
+        if not self._require_admin(
+            target="admin",
+            message="Admin mode is required to edit model-tag settings.",
+        ):
+            return
         v = self.model_tag_inputs.get(platform, "").strip()
         if not v:
             return
@@ -726,18 +827,39 @@ class NexusState(rx.State):
             pmt[platform] = existing
             self.platform_model_tags = pmt
             await db_update_platform_model_tags(_to_plain_python(pmt))
+            await self._log_admin_action(
+                action="add_model_tag",
+                summary=f"Added model tag '{v}' to {platform}.",
+                resource_type="settings",
+                resource_label=platform,
+                metadata={"model_tag": v},
+                refresh_settings_view=True,
+            )
         inputs = dict(self.model_tag_inputs)
         inputs[platform] = ""
         self.model_tag_inputs = inputs
 
     async def remove_platform_model_tag(self, platform: str, tag: str):
         """Remove a model tag from a specific platform."""
+        if not self._require_admin(
+            target="admin",
+            message="Admin mode is required to edit model-tag settings.",
+        ):
+            return
         pmt = dict(self.platform_model_tags)
         existing = list(pmt.get(platform, []))
         existing = [t for t in existing if t != tag]
         pmt[platform] = existing
         self.platform_model_tags = pmt
         await db_update_platform_model_tags(_to_plain_python(pmt))
+        await self._log_admin_action(
+            action="remove_model_tag",
+            summary=f"Removed model tag '{tag}' from {platform}.",
+            resource_type="settings",
+            resource_label=platform,
+            metadata={"model_tag": tag},
+            refresh_settings_view=True,
+        )
 
     @rx.event(background=True)
     async def fetch_available_calendars(self):
@@ -763,6 +885,19 @@ class NexusState(rx.State):
         self.new_admin_pin = v
 
     async def login_admin(self):
+        if self.admin_lockout_until:
+            try:
+                lockout_until = datetime.fromisoformat(self.admin_lockout_until)
+                if lockout_until > datetime.now():
+                    self.admin_error = (
+                        "Too many incorrect PIN attempts. "
+                        f"Try again after {lockout_until.strftime('%H:%M:%S')}."
+                    )
+                    return
+                self.admin_lockout_until = ""
+            except Exception:
+                self.admin_lockout_until = ""
+
         pin = self.admin_pin_input.strip()
         if not pin:
             self.admin_error = "Enter a PIN."
@@ -773,30 +908,64 @@ class NexusState(rx.State):
             self.admin_mode = True
             self.admin_error = ""
             self.admin_pin_input = ""
+            self.admin_login_attempts = 0
+            self.admin_lockout_until = ""
             return
-        pin_hash = hashlib.sha256(pin.encode()).hexdigest()
-        if pin_hash == stored:
+        is_valid, needs_upgrade = db_verify_admin_pin(pin, stored)
+        if is_valid:
             self.admin_mode = True
             self.admin_error = ""
             self.admin_pin_input = ""
+            self.admin_login_attempts = 0
+            self.admin_lockout_until = ""
+            if needs_upgrade:
+                await db_set_admin_pin(db_hash_admin_pin(pin))
         else:
-            self.admin_error = "Incorrect PIN."
+            self.admin_login_attempts += 1
+            if self.admin_login_attempts >= 5:
+                self.admin_lockout_until = (
+                    datetime.now() + timedelta(minutes=1)
+                ).isoformat()
+                self.admin_login_attempts = 0
+                self.admin_error = (
+                    "Too many incorrect PIN attempts. "
+                    "Admin login is locked for 1 minute."
+                )
+            else:
+                remaining = 5 - self.admin_login_attempts
+                self.admin_error = (
+                    "Incorrect PIN. "
+                    f"{remaining} attempt(s) remaining before a 1-minute lockout."
+                )
             self.admin_pin_input = ""
 
     async def set_admin_pin_value(self):
+        if not self._require_admin(
+            target="admin",
+            message="Admin mode is required to set or change the admin PIN.",
+        ):
+            return
         pin = self.new_admin_pin.strip()
         if len(pin) < 4:
             self.admin_error = "PIN must be at least 4 characters."
             return
-        pin_hash = hashlib.sha256(pin.encode()).hexdigest()
+        pin_hash = db_hash_admin_pin(pin)
         await db_set_admin_pin(pin_hash)
         self.has_admin_pin = True
+        self.admin_pin_input = ""
         self.new_admin_pin = ""
         self.admin_error = ""
+        await self._log_admin_action(
+            action="set_admin_pin",
+            summary="Updated the admin PIN.",
+            resource_type="settings",
+            refresh_settings_view=True,
+        )
 
     def logout_admin(self):
         self.admin_mode = False
         self.admin_pin_input = ""
+        self.new_admin_pin = ""
         self.admin_error = ""
 
     # DASHBOARD FILTERS
@@ -913,8 +1082,23 @@ class NexusState(rx.State):
         self.active_campaign_id = cid
         self.search_query = ""
         self.sync_error = ""
+        self.detail_error = ""
         self.last_sync_time = ""
+        self.range_sync_result = ""
         self.show_delete_dialog = False
+        self.show_delete_participant_dialog = False
+        self.delete_participant_event_id = ""
+        self.delete_participant_name = ""
+        self.show_bulk_delete_dialog = False
+        self.show_edit_participant = False
+        self.edit_participant_eid = ""
+        self.edit_participant_name = ""
+        self.edit_participant_email = ""
+        self.edit_participant_date = ""
+        self.edit_participant_time = ""
+        self.show_add_participant = False
+        self.editing_issue_event_id = ""
+        self.editing_issue_comment = ""
         self.selected_ids = []
         self.sort_field = "appointment_time"
         self.sort_dir = "asc"
@@ -1025,6 +1209,11 @@ class NexusState(rx.State):
     # CAMPAIGN STATUS
 
     async def set_campaign_status(self, new_status: str):
+        if not self._require_admin(
+            target="detail",
+            message="Admin mode is required to change campaign status.",
+        ):
+            return
         cid = self.active_campaign_id
         if not cid:
             return
@@ -1035,6 +1224,13 @@ class NexusState(rx.State):
             campaign["booked"] = progress["booked"]
             campaign["completed_all"] = progress["completed"]
             self.current_campaign = campaign
+            await self._log_admin_action(
+                action="update_campaign_status",
+                summary=f"Changed campaign status to {new_status}.",
+                resource_type="campaign",
+                resource_id=cid,
+                resource_label=campaign.get("name", ""),
+            )
 
     # CALENDAR SYNC (background)
 
@@ -1356,19 +1552,42 @@ class NexusState(rx.State):
     # DELETE CAMPAIGN
 
     def toggle_delete_dialog(self):
+        if not self._require_admin(
+            target="detail",
+            message="Admin mode is required to delete campaigns.",
+        ):
+            return
         self.show_delete_dialog = not self.show_delete_dialog
 
     async def confirm_delete_campaign(self):
+        if not self._require_admin(
+            target="detail",
+            message="Admin mode is required to delete campaigns.",
+        ):
+            return
         cid = self.active_campaign_id
         if cid:
+            campaign_name = self.current_campaign.get("name", "")
             await db_delete_campaign(cid)
             self.show_delete_dialog = False
+            await self._log_admin_action(
+                action="delete_campaign",
+                summary=f"Deleted campaign '{campaign_name}'.",
+                resource_type="campaign",
+                resource_id=cid,
+                resource_label=campaign_name,
+            )
             return rx.redirect("/")
 
     # DELETE PARTICIPANT
 
     def open_delete_participant(self, event_id: str):
         """Open confirmation dialog for deleting a participant."""
+        if not self._require_admin(
+            target="detail",
+            message="Admin mode is required to delete participants.",
+        ):
+            return
         self.delete_participant_event_id = event_id
         for p in self.participants:
             if p.get("google_event_id") == event_id:
@@ -1383,17 +1602,36 @@ class NexusState(rx.State):
 
     async def confirm_delete_participant(self):
         """Delete a single participant after confirmation."""
+        if not self._require_admin(
+            target="detail",
+            message="Admin mode is required to delete participants.",
+        ):
+            return
         cid = self.active_campaign_id
         eid = self.delete_participant_event_id
         if cid and eid:
+            participant_name = self.delete_participant_name
             await db_delete_participant(cid, eid)
             self.show_delete_participant_dialog = False
             self.delete_participant_event_id = ""
             self.delete_participant_name = ""
+            await self._log_admin_action(
+                action="delete_participant",
+                summary=f"Deleted participant '{participant_name}'.",
+                resource_type="participant",
+                resource_id=eid,
+                resource_label=participant_name,
+                metadata={"campaign_id": cid},
+            )
             await self._reload_participants()
 
     def open_bulk_delete(self):
         """Open confirmation dialog for bulk delete."""
+        if not self._require_admin(
+            target="detail",
+            message="Admin mode is required to bulk delete participants.",
+        ):
+            return
         if self.selected_ids:
             self.show_bulk_delete_dialog = True
 
@@ -1402,11 +1640,23 @@ class NexusState(rx.State):
 
     async def confirm_bulk_delete(self):
         """Delete all selected participants after confirmation."""
+        if not self._require_admin(
+            target="detail",
+            message="Admin mode is required to bulk delete participants.",
+        ):
+            return
         cid = self.active_campaign_id
         if cid and self.selected_ids:
+            deleted_count = len(self.selected_ids)
             await db_bulk_delete(cid, list(self.selected_ids))
             self.selected_ids = []
             self.show_bulk_delete_dialog = False
+            await self._log_admin_action(
+                action="bulk_delete_participants",
+                summary=f"Deleted {deleted_count} participant(s) from the campaign view.",
+                resource_type="participant",
+                metadata={"campaign_id": cid, "count": deleted_count},
+            )
             await self._reload_participants()
 
     # CAMPAIGN FORM
@@ -1513,6 +1763,11 @@ class NexusState(rx.State):
         self.form_error = ""
 
     async def create_campaign(self):
+        if not self._require_admin(
+            target="form",
+            message="Admin mode is required to create campaigns.",
+        ):
+            return
         if not self.form_name.strip():
             self.form_error = "Campaign name is required."
             return
@@ -1534,10 +1789,22 @@ class NexusState(rx.State):
             "default_platform": self.form_default_platform,
             "default_model_tag": self.form_default_model_tag,
         })
+        await self._log_admin_action(
+            action="create_campaign",
+            summary=f"Created campaign '{self.form_name.strip()}'.",
+            resource_type="campaign",
+            resource_id=cid,
+            resource_label=self.form_name.strip(),
+        )
         self.clear_form()
         return rx.redirect(f"/campaign/{cid}")
 
     async def save_campaign(self):
+        if not self._require_admin(
+            target="form",
+            message="Admin mode is required to edit campaigns.",
+        ):
+            return
         if not self.form_name.strip():
             self.form_error = "Campaign name is required."
             return
@@ -1562,14 +1829,35 @@ class NexusState(rx.State):
             "default_platform": self.form_default_platform,
             "default_model_tag": self.form_default_model_tag,
         })
+        await self._log_admin_action(
+            action="update_campaign",
+            summary=f"Updated campaign '{self.form_name.strip()}'.",
+            resource_type="campaign",
+            resource_id=cid,
+            resource_label=self.form_name.strip(),
+        )
         self.clear_form()
         return rx.redirect(f"/campaign/{cid}")
 
     # CAMPAIGN CLONING
 
     async def clone_current_campaign(self):
+        if not self._require_admin(
+            target="detail",
+            message="Admin mode is required to clone campaigns.",
+        ):
+            return
         cid = self.active_campaign_id
         if cid:
             new_cid = await db_clone_campaign(cid)
             if new_cid:
+                source_name = self.current_campaign.get("name", "")
+                await self._log_admin_action(
+                    action="clone_campaign",
+                    summary=f"Cloned campaign '{source_name}'.",
+                    resource_type="campaign",
+                    resource_id=new_cid,
+                    resource_label=source_name,
+                    metadata={"source_campaign_id": cid},
+                )
                 return rx.redirect(f"/campaign/{new_cid}/edit")

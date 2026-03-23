@@ -23,6 +23,56 @@ from ..components.design_tokens import (
 )
 
 
+def _admin_locked_panel() -> rx.Component:
+    return glass_card(
+        section_header(
+            "lock",
+            "Admin Access Required",
+            "Campaign editing is protected so core setup changes stay intentional.",
+        ),
+        rx.text(
+            "Unlock admin mode in Settings to edit this campaign. Once admin mode is active, this page immediately becomes the full edit form.",
+            size="2",
+            color=TEXT,
+            line_height="1.6",
+            margin_bottom="20px",
+        ),
+        rx.hstack(
+            rx.link(
+                rx.button(
+                    rx.icon("lock", size=14),
+                    "Unlock Admin",
+                    size="2",
+                    color_scheme="iris",
+                    border_radius=RADIUS_MD,
+                    cursor="pointer",
+                    background=ACCENT_GRADIENT,
+                ),
+                href="/settings",
+                _hover={"text_decoration": "none"},
+            ),
+            rx.link(
+                rx.button(
+                    "Back to Campaign",
+                    variant="soft",
+                    color_scheme="gray",
+                    size="2",
+                    border_radius=RADIUS_MD,
+                    cursor="pointer",
+                ),
+                href=rx.cond(
+                    NexusState.form_edit_campaign_id != "",
+                    "/campaign/" + NexusState.form_edit_campaign_id,
+                    "/",
+                ),
+                _hover={"text_decoration": "none"},
+            ),
+            spacing="3",
+            flex_wrap="wrap",
+        ),
+    )
+
+
 def edit_campaign_page() -> rx.Component:
     return rx.box(
         # -- back link
@@ -69,252 +119,258 @@ def edit_campaign_page() -> rx.Component:
                 margin_bottom="16px",
             ),
         ),
-        # -- Section 1: Details
-        glass_card(
-            section_header(
-                "file-text",
-                "Campaign Details",
-                "Name and description for this campaign",
-            ),
-            rx.vstack(
-                form_field("Campaign Name", NexusState.form_name,
-                       NexusState.set_form_name, "e.g. Q1 Berlin Sprint"),
-                form_field("Description", NexusState.form_description,
-                       NexusState.set_form_description,
-                       "Brief description...", area=True),
-                spacing="3",
-                width="100%",
-            ),
-            margin_bottom="16px",
-        ),
-        # -- Section 2: Goal & Timeline
-        glass_card(
-            section_header(
-                "target",
-                "Goal & Timeline",
-                "Collection target, deadline, and booking page",
-            ),
-            rx.vstack(
-                form_field("Collection Goal", NexusState.form_goal,
-                       NexusState.set_form_goal,
-                       "100"),
-                rx.vstack(
-                    rx.text("Deadline (optional)", size="2", weight="medium", color=SUBTEXT),
-                    rx.el.input(
-                        type="date",
-                        default_value=NexusState.form_deadline,
-                        on_change=NexusState.set_form_deadline,
-                        style={
-                            "width": "100%",
-                            "padding": "8px 12px",
-                            "border_radius": RADIUS_MD,
-                            "border": "1px solid rgba(255,255,255,0.1)",
-                            "background": "rgba(255,255,255,0.04)",
-                            "color": "inherit",
-                            "font_size": "14px",
-                            "outline": "none",
-                        },
+        rx.cond(
+            NexusState.admin_mode,
+            rx.fragment(
+                # -- Section 1: Details
+                glass_card(
+                    section_header(
+                        "file-text",
+                        "Campaign Details",
+                        "Name and description for this campaign",
                     ),
-                    spacing="1",
-                    width="100%",
-                ),
-                form_field("Booking Page URL", NexusState.form_booking_url,
-                       NexusState.set_form_booking_url,
-                       "https://calendly.com/..."),
-                spacing="3",
-                width="100%",
-            ),
-            margin_bottom="16px",
-        ),
-        # -- Section 3: External Links
-        glass_card(
-            section_header(
-                "link",
-                "External Links",
-                "Notion page and Linear project for this campaign",
-            ),
-            rx.vstack(
-                form_field("Notion Page URL", NexusState.form_notion_url,
-                       NexusState.set_form_notion_url,
-                       "https://notion.so/..."),
-                form_field("Linear Project URL", NexusState.form_linear_url,
-                       NexusState.set_form_linear_url,
-                       "https://linear.app/..."),
-                spacing="3",
-                width="100%",
-            ),
-            margin_bottom="16px",
-        ),
-        # -- Section 3: Calendar Config
-        glass_card(
-            section_header(
-                "calendar",
-                "Calendar Configuration",
-                "Google Calendar ID and keyword filter",
-            ),
-            rx.vstack(
-                form_field("Calendar ID", NexusState.form_calendar_id,
-                       NexusState.set_form_calendar_id,
-                       "primary"),
-                form_field("Keyword Filter", NexusState.form_calendar_filter,
-                       NexusState.set_form_calendar_filter,
-                       "e.g. Worldcoin"),
-                rx.text(
-                    "Tip: Go to Settings -> Discover Calendars to find your Calendar IDs.",
-                    size="1",
-                    color=SUBTEXT,
-                    font_style="italic",
-                ),
-                spacing="3",
-                width="100%",
-            ),
-            margin_bottom="24px",
-        ),
-        # -- Section 5: Device Configuration
-        glass_card(
-            section_header(
-                "monitor-smartphone",
-                "Device Configuration",
-                "Select the platforms and configure per-device participant quotas",
-            ),
-            rx.vstack(
-                rx.vstack(
-                    rx.text("Platforms *", size="2", weight="medium", color=SUBTEXT),
-                    rx.text(
-                        "Select one or more platforms this campaign will collect on.",
-                        size="1", color=SUBTEXT, font_style="italic",
+                    rx.vstack(
+                        form_field("Campaign Name", NexusState.form_name,
+                               NexusState.set_form_name, "e.g. Q1 Berlin Sprint"),
+                        form_field("Description", NexusState.form_description,
+                               NexusState.set_form_description,
+                               "Brief description...", area=True),
+                        spacing="3",
+                        width="100%",
                     ),
-                    rx.flex(
-                        rx.foreach(
-                            NexusState.platform_options,
-                            lambda opt: rx.box(
-                                rx.hstack(
-                                    rx.icon(
-                                        rx.cond(opt.selected, "check-square", "square"),
-                                        size=16,
-                                        color=rx.cond(opt.selected, ACCENT, SUBTEXT),
+                    margin_bottom="16px",
+                ),
+                # -- Section 2: Goal & Timeline
+                glass_card(
+                    section_header(
+                        "target",
+                        "Goal & Timeline",
+                        "Collection target, deadline, and booking page",
+                    ),
+                    rx.vstack(
+                        form_field("Collection Goal", NexusState.form_goal,
+                               NexusState.set_form_goal,
+                               "100"),
+                        rx.vstack(
+                            rx.text("Deadline (optional)", size="2", weight="medium", color=SUBTEXT),
+                            rx.el.input(
+                                type="date",
+                                default_value=NexusState.form_deadline,
+                                on_change=NexusState.set_form_deadline,
+                                style={
+                                    "width": "100%",
+                                    "padding": "8px 12px",
+                                    "border_radius": RADIUS_MD,
+                                    "border": "1px solid rgba(255,255,255,0.1)",
+                                    "background": "rgba(255,255,255,0.04)",
+                                    "color": "inherit",
+                                    "font_size": "14px",
+                                    "outline": "none",
+                                },
+                            ),
+                            spacing="1",
+                            width="100%",
+                        ),
+                        form_field("Booking Page URL", NexusState.form_booking_url,
+                               NexusState.set_form_booking_url,
+                               "https://calendly.com/..."),
+                        spacing="3",
+                        width="100%",
+                    ),
+                    margin_bottom="16px",
+                ),
+                # -- Section 3: External Links
+                glass_card(
+                    section_header(
+                        "link",
+                        "External Links",
+                        "Notion page and Linear project for this campaign",
+                    ),
+                    rx.vstack(
+                        form_field("Notion Page URL", NexusState.form_notion_url,
+                               NexusState.set_form_notion_url,
+                               "https://notion.so/..."),
+                        form_field("Linear Project URL", NexusState.form_linear_url,
+                               NexusState.set_form_linear_url,
+                               "https://linear.app/..."),
+                        spacing="3",
+                        width="100%",
+                    ),
+                    margin_bottom="16px",
+                ),
+                # -- Section 3: Calendar Config
+                glass_card(
+                    section_header(
+                        "calendar",
+                        "Calendar Configuration",
+                        "Google Calendar ID and keyword filter",
+                    ),
+                    rx.vstack(
+                        form_field("Calendar ID", NexusState.form_calendar_id,
+                               NexusState.set_form_calendar_id,
+                               "primary"),
+                        form_field("Keyword Filter", NexusState.form_calendar_filter,
+                               NexusState.set_form_calendar_filter,
+                               "e.g. Worldcoin"),
+                        rx.text(
+                            "Tip: Go to Settings -> Discover Calendars to find your Calendar IDs.",
+                            size="1",
+                            color=SUBTEXT,
+                            font_style="italic",
+                        ),
+                        spacing="3",
+                        width="100%",
+                    ),
+                    margin_bottom="24px",
+                ),
+                # -- Section 5: Device Configuration
+                glass_card(
+                    section_header(
+                        "monitor-smartphone",
+                        "Device Configuration",
+                        "Select the platforms and configure per-device participant quotas",
+                    ),
+                    rx.vstack(
+                        rx.vstack(
+                            rx.text("Platforms *", size="2", weight="medium", color=SUBTEXT),
+                            rx.text(
+                                "Select one or more platforms this campaign will collect on.",
+                                size="1", color=SUBTEXT, font_style="italic",
+                            ),
+                            rx.flex(
+                                rx.foreach(
+                                    NexusState.platform_options,
+                                    lambda opt: rx.box(
+                                        rx.hstack(
+                                            rx.icon(
+                                                rx.cond(opt.selected, "check-square", "square"),
+                                                size=16,
+                                                color=rx.cond(opt.selected, ACCENT, SUBTEXT),
+                                            ),
+                                            rx.text(opt.name, size="2", color=TEXT),
+                                            spacing="2",
+                                            align="center",
+                                        ),
+                                        padding="6px 12px",
+                                        border_radius=RADIUS_SM,
+                                        border=rx.cond(
+                                            opt.selected,
+                                            "1px solid " + ACCENT,
+                                            BORDER,
+                                        ),
+                                        background=rx.cond(
+                                            opt.selected,
+                                            ACCENT_SOFT,
+                                            "transparent",
+                                        ),
+                                        cursor="pointer",
+                                        on_click=NexusState.set_form_device_type(opt.name),
                                     ),
-                                    rx.text(opt.name, size="2", color=TEXT),
+                                ),
+                                flex_wrap="wrap",
+                                gap="8px",
+                                width="100%",
+                            ),
+                            spacing="1",
+                            width="100%",
+                        ),
+                        rx.vstack(
+                            rx.text("Device Quotas (optional)", size="2", weight="medium", color=SUBTEXT),
+                            rx.text(
+                                "Set max participants per platform. Format: enter quota for each platform.",
+                                size="1", color=SUBTEXT, font_style="italic",
+                            ),
+                            rx.foreach(
+                                NexusState.platforms,
+                                lambda p: rx.hstack(
+                                    rx.text(p, size="2", weight="medium", color=HEADING, min_width="90px"),
+                                    rx.el.input(
+                                        type="text",
+                                        input_mode="numeric",
+                                        placeholder="No limit",
+                                        default_value=NexusState.form_device_quota[p].to(str),
+                                        on_blur=lambda v: NexusState.set_form_device_quota_value(p + ":" + v),
+                                        style={
+                                            "width": "100px",
+                                            "padding": "6px 10px",
+                                            "border_radius": RADIUS_SM,
+                                            "border": BORDER,
+                                            "background": CARD_BG,
+                                            "color": "inherit",
+                                            "font_size": "13px",
+                                        },
+                                    ),
                                     spacing="2",
                                     align="center",
                                 ),
-                                padding="6px 12px",
-                                border_radius=RADIUS_SM,
-                                border=rx.cond(
-                                    opt.selected,
-                                    "1px solid " + ACCENT,
-                                    BORDER,
-                                ),
-                                background=rx.cond(
-                                    opt.selected,
-                                    ACCENT_SOFT,
-                                    "transparent",
-                                ),
-                                cursor="pointer",
-                                on_click=NexusState.set_form_device_type(opt.name),
-                            ),
-                        ),
-                        flex_wrap="wrap",
-                        gap="8px",
-                        width="100%",
-                    ),
-                    spacing="1",
-                    width="100%",
-                ),
-                rx.vstack(
-                    rx.text("Device Quotas (optional)", size="2", weight="medium", color=SUBTEXT),
-                    rx.text(
-                        "Set max participants per platform. Format: enter quota for each platform.",
-                        size="1", color=SUBTEXT, font_style="italic",
-                    ),
-                    rx.foreach(
-                        NexusState.platforms,
-                        lambda p: rx.hstack(
-                            rx.text(p, size="2", weight="medium", color=HEADING, min_width="90px"),
-                            rx.el.input(
-                                type="text",
-                                input_mode="numeric",
-                                placeholder="No limit",
-                                default_value=NexusState.form_device_quota[p].to(str),
-                                on_blur=lambda v: NexusState.set_form_device_quota_value(p + ":" + v),
-                                style={
-                                    "width": "100px",
-                                    "padding": "6px 10px",
-                                    "border_radius": RADIUS_SM,
-                                    "border": BORDER,
-                                    "background": CARD_BG,
-                                    "color": "inherit",
-                                    "font_size": "13px",
-                                },
                             ),
                             spacing="2",
-                            align="center",
+                            width="100%",
+                        ),
+                        rx.vstack(
+                            rx.text("Default Platform (optional)", size="2", weight="medium", color=SUBTEXT),
+                            rx.select(
+                                NexusState.platforms_with_none,
+                                value=NexusState.form_default_platform_display,
+                                on_change=NexusState.set_form_default_platform,
+                                placeholder="None (set manually)",
+                                size="2",
+                                variant="surface",
+                            ),
+                            spacing="1",
+                            width="100%",
+                        ),
+                        rx.vstack(
+                            rx.text("Default Model Tag (optional)", size="2", weight="medium", color=SUBTEXT),
+                            rx.select(
+                                NexusState.model_tags_with_none,
+                                value=NexusState.form_default_model_tag_display,
+                                on_change=NexusState.set_form_default_model_tag,
+                                placeholder="None (set manually)",
+                                size="2",
+                                variant="surface",
+                            ),
+                            spacing="1",
+                            width="100%",
+                        ),
+                        spacing="3",
+                        width="100%",
+                    ),
+                    margin_bottom="24px",
+                ),
+                # -- Action buttons
+                rx.hstack(
+                    rx.link(
+                        rx.button(
+                            "Cancel",
+                            variant="soft",
+                            color_scheme="gray",
+                            size="3",
+                            border_radius=RADIUS_MD,
+                            cursor="pointer",
+                        ),
+                        href=rx.cond(
+                            NexusState.form_edit_campaign_id != "",
+                            "/campaign/" + NexusState.form_edit_campaign_id,
+                            "/",
                         ),
                     ),
-                    spacing="2",
-                    width="100%",
-                ),
-                rx.vstack(
-                    rx.text("Default Platform (optional)", size="2", weight="medium", color=SUBTEXT),
-                    rx.select(
-                        NexusState.platforms_with_none,
-                        value=NexusState.form_default_platform_display,
-                        on_change=NexusState.set_form_default_platform,
-                        placeholder="None (set manually)",
-                        size="2",
-                        variant="surface",
+                    rx.button(
+                        rx.icon("save", size=16),
+                        "Save Changes",
+                        size="3",
+                        color_scheme="iris",
+                        border_radius=RADIUS_MD,
+                        cursor="pointer",
+                        on_click=NexusState.save_campaign,
+                        background=ACCENT_GRADIENT,
                     ),
-                    spacing="1",
+                    spacing="3",
+                    justify="end",
                     width="100%",
                 ),
-                rx.vstack(
-                    rx.text("Default Model Tag (optional)", size="2", weight="medium", color=SUBTEXT),
-                    rx.select(
-                        NexusState.model_tags_with_none,
-                        value=NexusState.form_default_model_tag_display,
-                        on_change=NexusState.set_form_default_model_tag,
-                        placeholder="None (set manually)",
-                        size="2",
-                        variant="surface",
-                    ),
-                    spacing="1",
-                    width="100%",
-                ),
-                spacing="3",
-                width="100%",
             ),
-            margin_bottom="24px",
-        ),
-        # -- Action buttons
-        rx.hstack(
-            rx.link(
-                rx.button(
-                    "Cancel",
-                    variant="soft",
-                    color_scheme="gray",
-                    size="3",
-                    border_radius=RADIUS_MD,
-                    cursor="pointer",
-                ),
-                href=rx.cond(
-                    NexusState.form_edit_campaign_id != "",
-                    "/campaign/" + NexusState.form_edit_campaign_id,
-                    "/",
-                ),
-            ),
-            rx.button(
-                rx.icon("save", size=16),
-                "Save Changes",
-                size="3",
-                color_scheme="iris",
-                border_radius=RADIUS_MD,
-                cursor="pointer",
-                on_click=NexusState.save_campaign,
-                background=ACCENT_GRADIENT,
-            ),
-            spacing="3",
-            justify="end",
-            width="100%",
+            _admin_locked_panel(),
         ),
         max_width=MAX_WIDTH_NARROW,
         margin="0 auto",

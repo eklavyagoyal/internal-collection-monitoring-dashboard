@@ -117,5 +117,5 @@ app.add_page(
     settings_page,
     route="/settings",
     title="Settings · Nexus-Track",
-    on_load=NexusState.load_settings,
+    on_load=[NexusState.load_settings, NexusState.load_recent_admin_actions],
 )

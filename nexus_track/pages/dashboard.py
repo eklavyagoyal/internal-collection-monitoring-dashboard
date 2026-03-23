@@ -47,6 +47,37 @@ def _device_chip(label: str, value: str) -> rx.Component:
     )
 
 
+def _campaign_cta(primary_label: str) -> rx.Component:
+    return rx.cond(
+        NexusState.admin_mode,
+        rx.link(
+            rx.button(
+                rx.icon("plus", size=15),
+                primary_label,
+                size="2",
+                variant="solid",
+                cursor="pointer",
+                border_radius=RADIUS_MD,
+                background=ACCENT,
+            ),
+            href="/new",
+            _hover={"text_decoration": "none"},
+        ),
+        rx.link(
+            rx.button(
+                rx.icon("lock", size=15),
+                "Unlock Admin",
+                size="2",
+                variant="soft",
+                cursor="pointer",
+                border_radius=RADIUS_MD,
+            ),
+            href="/settings",
+            _hover={"text_decoration": "none"},
+        ),
+    )
+
+
 # -- Empty state
 def _empty_state() -> rx.Component:
     return rx.center(
@@ -64,24 +95,20 @@ def _empty_state() -> rx.Component:
                 "No campaigns yet",
                 size="4", weight="medium", color=HEADING,
             ),
-            rx.text(
-                "Create your first collection campaign to start tracking.",
-                size="2", color=SUBTEXT, text_align="center",
-                max_width="320px",
-            ),
-            rx.link(
-                rx.button(
-                    rx.icon("plus", size=14),
-                    "Create Campaign",
-                    size="2",
-                    variant="solid",
-                    cursor="pointer",
-                    border_radius=RADIUS_MD,
-                    background=ACCENT,
+            rx.cond(
+                NexusState.admin_mode,
+                rx.text(
+                    "Create your first collection campaign to start tracking.",
+                    size="2", color=SUBTEXT, text_align="center",
+                    max_width="320px",
                 ),
-                href="/new",
-                _hover={"text_decoration": "none"},
+                rx.text(
+                    "Unlock admin mode in Settings to create your first collection campaign.",
+                    size="2", color=SUBTEXT, text_align="center",
+                    max_width="320px",
+                ),
             ),
+            _campaign_cta("Create Campaign"),
             align="center",
             spacing="3",
             padding="80px 24px",
@@ -138,19 +165,7 @@ def dashboard_page() -> rx.Component:
                         align="center",
                     ),
                     # New campaign button
-                    rx.link(
-                        rx.button(
-                            rx.icon("plus", size=15),
-                            "New Campaign",
-                            size="2",
-                            variant="solid",
-                            cursor="pointer",
-                            border_radius=RADIUS_MD,
-                            background=ACCENT,
-                        ),
-                        href="/new",
-                        _hover={"text_decoration": "none"},
-                    ),
+                    _campaign_cta("New Campaign"),
                     spacing="3",
                     align="center",
                 ),

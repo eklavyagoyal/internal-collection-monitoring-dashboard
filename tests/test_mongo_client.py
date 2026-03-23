@@ -4,6 +4,7 @@ Tests for mongo_client.py — campaign CRUD, participant CRUD, progress aggregat
 Uses mongomock_motor to provide an in-memory MongoDB for deterministic testing.
 """
 
+import hashlib
 import os
 import pytest
 
@@ -311,6 +312,72 @@ class TestExportCSV:
         rows = await mc.get_participants_for_export(cid)
         assert len(rows) == 1
         assert rows[0]["issue_comment"] == "Had issue"
+
+
+class TestAdminPinSecurity:
+    @pytest.mark.asyncio
+    async def test_hash_and_verify_admin_pin(self):
+        stored = mc.hash_admin_pin("2468")
+
+        assert stored.startswith(f"{mc.PIN_HASH_ALGO}$")
+        assert stored != mc.hash_admin_pin("2468")
+
+        is_valid, needs_upgrade = mc.verify_admin_pin("2468", stored)
+        assert is_valid is True
+        assert needs_upgrade is False
+
+    @pytest.mark.asyncio
+    async def test_verify_admin_pin_marks_old_iterations_for_upgrade(self):
+        stored = mc.hash_admin_pin("2468", iterations=10_000)
+
+        is_valid, needs_upgrade = mc.verify_admin_pin("2468", stored)
+        assert is_valid is True
+        assert needs_upgrade is True
+
+    @pytest.mark.asyncio
+    async def test_verify_admin_pin_accepts_legacy_sha256_and_requests_upgrade(self):
+        legacy = hashlib.sha256("2468".encode("utf-8")).hexdigest()
+
+        is_valid, needs_upgrade = mc.verify_admin_pin("2468", legacy)
+        assert is_valid is True
+        assert needs_upgrade is True
+
+
+class TestAdminAuditLog:
+    @pytest.mark.asyncio
+    async def test_record_audit_event_roundtrip(self):
+        await mc.record_audit_event(
+            action="delete_campaign",
+            summary="Deleted campaign 'Alpha'.",
+            resource_type="campaign",
+            resource_id="camp-1",
+            resource_label="Alpha",
+            metadata={"participant_count": 12},
+        )
+
+        events = await mc.get_recent_audit_events(limit=5)
+        assert len(events) == 1
+        assert events[0]["action"] == "delete_campaign"
+        assert events[0]["summary"] == "Deleted campaign 'Alpha'."
+        assert events[0]["resource_type"] == "campaign"
+        assert events[0]["resource_id"] == "camp-1"
+        assert events[0]["resource_label"] == "Alpha"
+        assert events[0]["metadata"] == {"participant_count": 12}
+        assert events[0]["actor_role"] == "admin"
+
+    @pytest.mark.asyncio
+    async def test_recent_audit_events_are_sorted_newest_first(self):
+        await mc.record_audit_event(
+            action="older",
+            summary="Older event.",
+        )
+        await mc.record_audit_event(
+            action="newer",
+            summary="Newer event.",
+        )
+
+        events = await mc.get_recent_audit_events(limit=2)
+        assert [event["action"] for event in events] == ["newer", "older"]
 
 
 class TestSyncedDates:

@@ -40,6 +40,7 @@ from ..components.design_tokens import (
     TRANSITION,
     TRANSITION_FAST,
     VIOLET,
+    campaign_status_indicator,
     glass_card,
     ghost_icon_btn,
     dual_progress_bar,
@@ -77,6 +78,19 @@ def _stat_pill(label: str, value: rx.Var, color: str, bg) -> rx.Component:
         padding_y="8px",
         border_radius=RADIUS_MD,
         background=bg,
+    )
+
+
+def _admin_manage_hint(message: str) -> rx.Component:
+    return rx.link(
+        rx.hstack(
+            rx.icon("lock", size=12, color=SUBTEXT),
+            rx.text(message, size="1", color=SUBTEXT),
+            spacing="2",
+            align="center",
+        ),
+        href="/settings",
+        _hover={"text_decoration": "none", "opacity": "0.8"},
     )
 
 
@@ -180,12 +194,21 @@ def _campaign_header() -> rx.Component:
             ),
             # CENTER: campaign status dropdown
             rx.vstack(
-                rx.select(
-                    ["active", "paused", "completed"],
-                    value=NexusState.campaign_status,
-                    on_change=NexusState.set_campaign_status,
-                    size="1",
-                    variant="soft",
+                rx.cond(
+                    NexusState.admin_mode,
+                    rx.select(
+                        ["active", "paused", "completed"],
+                        value=NexusState.campaign_status,
+                        on_change=NexusState.set_campaign_status,
+                        size="1",
+                        variant="soft",
+                    ),
+                    rx.vstack(
+                        campaign_status_indicator(NexusState.campaign_status),
+                        _admin_manage_hint("Unlock admin to change campaign status"),
+                        spacing="1",
+                        align="center",
+                    ),
                 ),
                 # Meta pills: filter, created, last sync
                 rx.hstack(
@@ -256,39 +279,48 @@ def _campaign_header() -> rx.Component:
                     min_width="160px",
                 ),
                 # Action buttons
-                rx.hstack(
-                    rx.link(
+                rx.cond(
+                    NexusState.admin_mode,
+                    rx.hstack(
+                        rx.link(
+                            rx.icon_button(
+                                rx.icon("pencil", size=16),
+                                size="2",
+                                variant="soft",
+                                color_scheme="iris",
+                                border_radius=RADIUS_MD,
+                                cursor="pointer",
+                            ),
+                            href="/campaign/" + NexusState.active_campaign_id + "/edit",
+                        ),
                         rx.icon_button(
-                            rx.icon("pencil", size=16),
+                            rx.icon("copy", size=16),
                             size="2",
                             variant="soft",
-                            color_scheme="iris",
+                            color_scheme="blue",
                             border_radius=RADIUS_MD,
+                            on_click=NexusState.clone_current_campaign,
+                            cursor="pointer",
+                            title="Clone Campaign",
+                        ),
+                        rx.icon_button(
+                            rx.icon("trash-2", size=16),
+                            size="2",
+                            variant="soft",
+                            color_scheme="red",
+                            border_radius=RADIUS_MD,
+                            on_click=NexusState.toggle_delete_dialog,
                             cursor="pointer",
                         ),
-                        href="/campaign/" + NexusState.active_campaign_id + "/edit",
+                        spacing="2",
+                        margin_top="8px",
                     ),
-                    rx.icon_button(
-                        rx.icon("copy", size=16),
-                        size="2",
-                        variant="soft",
-                        color_scheme="blue",
-                        border_radius=RADIUS_MD,
-                        on_click=NexusState.clone_current_campaign,
-                        cursor="pointer",
-                        title="Clone Campaign",
+                    rx.box(
+                        _admin_manage_hint(
+                            "Unlock admin in Settings to edit, clone, or delete this campaign",
+                        ),
+                        margin_top="10px",
                     ),
-                    rx.icon_button(
-                        rx.icon("trash-2", size=16),
-                        size="2",
-                        variant="soft",
-                        color_scheme="red",
-                        border_radius=RADIUS_MD,
-                        on_click=NexusState.toggle_delete_dialog,
-                        cursor="pointer",
-                    ),
-                    spacing="2",
-                    margin_top="8px",
                 ),
                 spacing="2",
                 align="end",
@@ -882,15 +914,19 @@ def _bulk_action_bar() -> rx.Component:
                     on_click=NexusState.bulk_set_status("Booked"),
                     cursor="pointer",
                 ),
-                rx.button(
-                    rx.icon("trash-2", size=12),
-                    "Delete",
-                    size="1",
-                    variant="soft",
-                    color_scheme="red",
-                    border_radius=RADIUS_SM,
-                    on_click=NexusState.open_bulk_delete,
-                    cursor="pointer",
+                rx.cond(
+                    NexusState.admin_mode,
+                    rx.button(
+                        rx.icon("trash-2", size=12),
+                        "Delete",
+                        size="1",
+                        variant="soft",
+                        color_scheme="red",
+                        border_radius=RADIUS_SM,
+                        on_click=NexusState.open_bulk_delete,
+                        cursor="pointer",
+                    ),
+                    _admin_manage_hint("Unlock admin to delete selected participants"),
                 ),
                 rx.button(
                     "Clear",
@@ -1058,8 +1094,9 @@ def _bulk_delete_dialog() -> rx.Component:
         rx.alert_dialog.content(
             rx.alert_dialog.title("Delete Participants"),
             rx.alert_dialog.description(
-                "Are you sure you want to delete the selected participant(s)? "
-                "This action cannot be undone."
+                "Delete "
+                + NexusState.selection_count.to(str)
+                + " selected participant(s)? This permanently removes them from this campaign and cannot be undone."
             ),
             rx.hstack(
                 rx.alert_dialog.cancel(
@@ -1165,7 +1202,9 @@ def _delete_participant_dialog() -> rx.Component:
         rx.alert_dialog.content(
             rx.alert_dialog.title("Delete Participant"),
             rx.alert_dialog.description(
-                "Are you sure you want to delete this participant? This action cannot be undone."
+                "Delete "
+                + NexusState.delete_participant_name
+                + "? This permanently removes the participant record and cannot be undone."
             ),
             rx.hstack(
                 rx.alert_dialog.cancel(
@@ -1200,8 +1239,9 @@ def _delete_dialog() -> rx.Component:
         rx.alert_dialog.content(
             rx.alert_dialog.title("Delete Campaign"),
             rx.alert_dialog.description(
-                "This will permanently delete the campaign and all participant "
-                "records. This action cannot be undone."
+                "Delete campaign "
+                + NexusState.campaign_name
+                + "? This permanently removes the campaign and all participant records. This action cannot be undone."
             ),
             rx.hstack(
                 rx.alert_dialog.cancel(
@@ -1393,6 +1433,16 @@ def campaign_detail_page() -> rx.Component:
                 NexusState.sync_error,
                 icon="triangle-alert",
                 color_scheme="red",
+                border_radius=RADIUS_MD,
+                margin_bottom="16px",
+            ),
+        ),
+        rx.cond(
+            NexusState.detail_error != "",
+            rx.callout(
+                NexusState.detail_error,
+                icon="lock",
+                color_scheme="amber",
                 border_radius=RADIUS_MD,
                 margin_bottom="16px",
             ),

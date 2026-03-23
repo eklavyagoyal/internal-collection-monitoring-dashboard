@@ -7,6 +7,8 @@ Collections:
   • **settings**     – user-configurable platform/model labels + admin config
 """
 
+import hashlib
+import hmac
 import os
 import secrets
 from datetime import datetime, timezone
@@ -25,6 +27,8 @@ DEFAULT_PLATFORMS = ["Orb", "Kiosk-v1", "Kiosk-v2", "Self-Serve", "Other"]
 DEFAULT_MODEL_TAGS = ["v4.5", "v4.6", "v5.0", "beta"]
 DEFAULT_DEVICE_TYPES = ["iOS", "Android", "Orb"]
 FIXED_PARTICIPANT_STATUSES = ("Booked", "Completed")
+PIN_HASH_ALGO = "pbkdf2_sha256"
+PIN_HASH_ITERATIONS = 390_000
 
 
 def _get_client() -> AsyncIOMotorClient:
@@ -54,6 +58,10 @@ def _settings():
     return _db()["settings"]
 
 
+def _audit_log():
+    return _db()["audit_log"]
+
+
 # ---------------------------------------------------------------------------
 # Indexes (idempotent)
 # ---------------------------------------------------------------------------
@@ -75,6 +83,7 @@ async def ensure_indexes() -> None:
         [("campaign_id", 1), ("status", 1)],
     )
     await _participants().create_index("email")
+    await _audit_log().create_index([("created_at", -1)])
 
     # Migrate legacy statuses to new model
     await _participants().update_many(
@@ -147,6 +156,79 @@ async def get_admin_pin_hash() -> str:
     if doc:
         return doc.get("admin_pin_hash", "")
     return ""
+
+
+def hash_admin_pin(pin: str, *, iterations: int = PIN_HASH_ITERATIONS) -> str:
+    """Return a PBKDF2-based hash string for storing the admin PIN."""
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", pin.encode("utf-8"), salt, iterations,
+    )
+    return f"{PIN_HASH_ALGO}${iterations}${salt.hex()}${digest.hex()}"
+
+
+def verify_admin_pin(pin: str, stored_hash: str) -> tuple[bool, bool]:
+    """Verify an admin PIN against the stored hash.
+
+    Returns ``(is_valid, needs_upgrade)``.
+    Legacy unsalted SHA-256 hashes still verify so existing installations
+    keep working, but they are marked for upgrade on the next successful login.
+    """
+    if not stored_hash:
+        return False, False
+
+    if stored_hash.startswith(f"{PIN_HASH_ALGO}$"):
+        try:
+            _, iterations_raw, salt_hex, digest_hex = stored_hash.split("$", 3)
+            iterations = int(iterations_raw)
+            salt = bytes.fromhex(salt_hex)
+            expected = bytes.fromhex(digest_hex)
+        except (ValueError, TypeError):
+            return False, False
+
+        candidate = hashlib.pbkdf2_hmac(
+            "sha256", pin.encode("utf-8"), salt, iterations,
+        )
+        is_valid = hmac.compare_digest(candidate, expected)
+        needs_upgrade = iterations != PIN_HASH_ITERATIONS
+        return is_valid, (is_valid and needs_upgrade)
+
+    legacy_digest = hashlib.sha256(pin.encode("utf-8")).hexdigest()
+    is_valid = hmac.compare_digest(legacy_digest, stored_hash)
+    return is_valid, is_valid
+
+
+async def record_audit_event(
+    *,
+    action: str,
+    summary: str,
+    resource_type: str = "",
+    resource_id: str = "",
+    resource_label: str = "",
+    metadata: dict | None = None,
+) -> None:
+    """Persist a lightweight admin audit event."""
+    now = datetime.now(timezone.utc).isoformat()
+    await _audit_log().insert_one({
+        "created_at": now,
+        "actor_role": "admin",
+        "action": action,
+        "summary": summary,
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "resource_label": resource_label,
+        "metadata": metadata or {},
+    })
+
+
+async def get_recent_audit_events(limit: int = 10) -> list[dict]:
+    """Return the most recent admin audit events, newest first."""
+    cursor = _audit_log().find().sort("created_at", -1).limit(limit)
+    out: list[dict] = []
+    async for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        out.append(doc)
+    return out
 
 
 # =========================================================================
