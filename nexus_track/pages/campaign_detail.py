@@ -94,6 +94,145 @@ def _admin_manage_hint(message: str) -> rx.Component:
     )
 
 
+def _sync_timestamp_stat(label: str, value) -> rx.Component:
+    return rx.vstack(
+        rx.text(
+            label,
+            size="1",
+            color=SUBTEXT,
+            text_transform="uppercase",
+            letter_spacing="0.04em",
+        ),
+        rx.text(
+            value,
+            size="1",
+            weight="medium",
+            color=HEADING,
+            line_height="1.4",
+        ),
+        spacing="1",
+        align="start",
+        min_width="0",
+    )
+
+
+def _sync_health_panel() -> rx.Component:
+    sync_state = NexusState.current_campaign_sync_health["sync_health_state"]
+    return rx.box(
+        rx.flex(
+            rx.vstack(
+                rx.hstack(
+                    rx.box(
+                        width="8px",
+                        height="8px",
+                        border_radius="50%",
+                        background=rx.cond(
+                            sync_state == "fresh",
+                            GREEN,
+                            rx.cond(
+                                sync_state == "stale",
+                                AMBER,
+                                rx.cond(
+                                    sync_state == "failed",
+                                    RED,
+                                    SUBTEXT,
+                                ),
+                            ),
+                        ),
+                    ),
+                    rx.text(
+                        NexusState.current_campaign_sync_health["sync_health_label"],
+                        size="2",
+                        weight="bold",
+                        color=HEADING,
+                    ),
+                    spacing="2",
+                    align="center",
+                ),
+                rx.text(
+                    NexusState.current_campaign_sync_health["sync_primary_message"],
+                    size="2",
+                    color=TEXT,
+                    line_height="1.55",
+                ),
+                rx.cond(
+                    NexusState.current_campaign_sync_health["sync_secondary_message"] != "",
+                    rx.text(
+                        NexusState.current_campaign_sync_health["sync_secondary_message"],
+                        size="1",
+                        color=rx.cond(
+                            sync_state == "failed",
+                            RED,
+                            rx.cond(
+                                sync_state == "stale",
+                                AMBER,
+                                SUBTEXT,
+                            ),
+                        ),
+                        line_height="1.55",
+                    ),
+                    rx.fragment(),
+                ),
+                spacing="2",
+                align="start",
+                width="100%",
+            ),
+            rx.flex(
+                _sync_timestamp_stat(
+                    "Last successful sync",
+                    NexusState.current_campaign_sync_health["sync_last_success_display"],
+                ),
+                rx.cond(
+                    NexusState.current_campaign_sync_health["sync_show_last_attempt"],
+                    _sync_timestamp_stat(
+                        "Last attempted sync",
+                        NexusState.current_campaign_sync_health["sync_last_attempt_display"],
+                    ),
+                    rx.fragment(),
+                ),
+                gap="4",
+                wrap="wrap",
+                justify="end",
+                width=rx.breakpoints(initial="100%", md="auto"),
+            ),
+            direction=rx.breakpoints(initial="column", md="row"),
+            justify="between",
+            align=rx.breakpoints(initial="start", md="start"),
+            gap="4",
+            width="100%",
+        ),
+        padding="14px 16px",
+        border_radius=RADIUS_MD,
+        background=rx.cond(
+            sync_state == "fresh",
+            GREEN_SOFT,
+            rx.cond(
+                sync_state == "stale",
+                AMBER_SOFT,
+                rx.cond(
+                    sync_state == "failed",
+                    RED_SOFT,
+                    ACCENT_SOFT,
+                ),
+            ),
+        ),
+        border=rx.cond(
+            sync_state == "fresh",
+            "1px solid rgba(34,197,94,0.16)",
+            rx.cond(
+                sync_state == "stale",
+                "1px solid rgba(245,158,11,0.18)",
+                rx.cond(
+                    sync_state == "failed",
+                    "1px solid rgba(239,68,68,0.18)",
+                    "1px solid rgba(148,163,184,0.16)",
+                ),
+            ),
+        ),
+        width="100%",
+    )
+
+
 
 
 # -----------------------------------------------------------------------
@@ -220,11 +359,55 @@ def _campaign_header() -> rx.Component:
                             spacing="1", align="center",
                         ),
                     ),
+                    rx.hstack(
+                        rx.box(
+                            width="7px",
+                            height="7px",
+                            border_radius="50%",
+                            background=rx.cond(
+                                NexusState.current_campaign_sync_health["sync_health_state"] == "fresh",
+                                GREEN,
+                                rx.cond(
+                                    NexusState.current_campaign_sync_health["sync_health_state"] == "stale",
+                                    AMBER,
+                                    rx.cond(
+                                        NexusState.current_campaign_sync_health["sync_health_state"] == "failed",
+                                        RED,
+                                        SUBTEXT,
+                                    ),
+                                ),
+                            ),
+                        ),
+                        rx.text(
+                            NexusState.current_campaign_sync_health["sync_health_label"],
+                            size="1",
+                            color=HEADING,
+                            weight="medium",
+                        ),
+                        spacing="2",
+                        align="center",
+                    ),
+                    rx.hstack(
+                        rx.icon("refresh-cw", size=11, color=SUBTEXT),
+                        rx.text(
+                            "Successful ",
+                            NexusState.current_campaign_sync_health["sync_last_success_display"],
+                            size="1",
+                            color=SUBTEXT,
+                        ),
+                        spacing="1",
+                        align="center",
+                    ),
                     rx.cond(
-                        NexusState.campaign_last_sync != "",
+                        NexusState.current_campaign_sync_health["sync_show_last_attempt"],
                         rx.hstack(
-                            rx.icon("refresh-cw", size=11, color=SUBTEXT),
-                            rx.text(NexusState.campaign_last_sync, size="1", color=SUBTEXT),
+                            rx.icon("history", size=11, color=SUBTEXT),
+                            rx.text(
+                                "Attempted ",
+                                NexusState.current_campaign_sync_health["sync_last_attempt_display"],
+                                size="1",
+                                color=SUBTEXT,
+                            ),
                             spacing="1", align="center",
                         ),
                     ),
@@ -1014,11 +1197,17 @@ def _sync_bar() -> rx.Component:
             gap="4",
             width="100%",
         ),
+        rx.box(
+            _sync_health_panel(),
+            margin_top="16px",
+        ),
         rx.grid(
             rx.vstack(
                 rx.text("Sync", size="1", weight="bold", color=SUBTEXT),
                 rx.text(
-                    "One-day sync always imports exactly " + NexusState.display_date_label + ".",
+                    "One-day sync always imports exactly "
+                    + NexusState.display_date_label
+                    + ". A campaign only returns to green after a successful refresh.",
                     size="1",
                     color=TEXT,
                     line_height="1.5",
@@ -1739,7 +1928,33 @@ def campaign_detail_page() -> rx.Component:
         rx.cond(
             NexusState.sync_error != "",
             rx.callout(
-                NexusState.sync_error,
+                rx.vstack(
+                    rx.text(
+                        NexusState.sync_error,
+                        size="2",
+                        weight="bold",
+                    ),
+                    rx.cond(
+                        NexusState.sync_error_action != "",
+                        rx.text(
+                            NexusState.sync_error_action,
+                            size="1",
+                            line_height="1.5",
+                        ),
+                        rx.fragment(),
+                    ),
+                    rx.cond(
+                        NexusState.sync_error_detail != "",
+                        rx.text(
+                            "Technical detail: " + NexusState.sync_error_detail,
+                            size="1",
+                            line_height="1.5",
+                        ),
+                        rx.fragment(),
+                    ),
+                    spacing="1",
+                    align="start",
+                ),
                 icon="triangle-alert",
                 color_scheme="red",
                 border_radius=RADIUS_MD,

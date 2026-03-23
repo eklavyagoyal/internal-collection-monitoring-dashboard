@@ -8,13 +8,18 @@ from .design_tokens import (
     ACCENT_GRADIENT_H,
     ACCENT_SOFT,
     AMBER,
+    AMBER_SOFT,
     BORDER,
     CARD_BG,
     GREEN,
+    GREEN_SOFT,
     HEADING,
     HOVER_LIFT,
     RADIUS_LG,
+    RADIUS_MD,
     RADIUS_SM,
+    RED,
+    RED_SOFT,
     SHADOW_SM,
     SUBTEXT,
     TEXT,
@@ -22,6 +27,151 @@ from .design_tokens import (
     campaign_status_indicator,
     dual_progress_bar,
 )
+
+
+def _sync_meta_item(label: str, value) -> rx.Component:
+    return rx.vstack(
+        rx.text(
+            label,
+            size="1",
+            color=SUBTEXT,
+            text_transform="uppercase",
+            letter_spacing="0.04em",
+        ),
+        rx.text(
+            value,
+            size="1",
+            weight="medium",
+            color=HEADING,
+            line_height="1.3",
+        ),
+        spacing="1",
+        align="start",
+        min_width="0",
+    )
+
+
+def _sync_health_panel(campaign: dict) -> rx.Component:
+    sync_state = campaign["sync_health_state"].to(str)
+    return rx.box(
+        rx.vstack(
+            rx.hstack(
+                rx.hstack(
+                    rx.box(
+                        width="7px",
+                        height="7px",
+                        border_radius="50%",
+                        background=rx.cond(
+                            sync_state == "fresh",
+                            GREEN,
+                            rx.cond(
+                                sync_state == "stale",
+                                AMBER,
+                                rx.cond(
+                                    sync_state == "failed",
+                                    RED,
+                                    SUBTEXT,
+                                ),
+                            ),
+                        ),
+                    ),
+                    rx.text(
+                        campaign["sync_health_label"],
+                        size="1",
+                        weight="bold",
+                        color=HEADING,
+                    ),
+                    spacing="2",
+                    align="center",
+                ),
+                rx.spacer(),
+                rx.cond(
+                    campaign["sync_needs_attention"],
+                    rx.badge(
+                        "Check sync",
+                        size="1",
+                        variant="soft",
+                        color_scheme=rx.cond(
+                            sync_state == "failed",
+                            "red",
+                            "amber",
+                        ),
+                    ),
+                    rx.fragment(),
+                ),
+                width="100%",
+                align="center",
+            ),
+            rx.text(
+                campaign["sync_primary_message"],
+                size="1",
+                color=TEXT,
+                line_height="1.55",
+            ),
+            rx.cond(
+                campaign["sync_secondary_message"] != "",
+                rx.text(
+                    campaign["sync_secondary_message"],
+                    size="1",
+                    color=rx.cond(
+                        sync_state == "failed",
+                        RED,
+                        rx.cond(
+                            sync_state == "stale",
+                            AMBER,
+                            SUBTEXT,
+                        ),
+                    ),
+                    line_height="1.55",
+                ),
+                rx.fragment(),
+            ),
+            rx.hstack(
+                rx.cond(
+                    campaign["sync_show_last_attempt"],
+                    _sync_meta_item("Attempted", campaign["sync_last_attempt_display"]),
+                    rx.fragment(),
+                ),
+                _sync_meta_item("Successful", campaign["sync_last_success_display"]),
+                spacing="3",
+                align="start",
+                width="100%",
+                flex_wrap="wrap",
+            ),
+            spacing="2",
+            width="100%",
+            align="start",
+        ),
+        padding="12px",
+        border_radius=RADIUS_MD,
+        background=rx.cond(
+            sync_state == "fresh",
+            GREEN_SOFT,
+            rx.cond(
+                sync_state == "stale",
+                AMBER_SOFT,
+                rx.cond(
+                    sync_state == "failed",
+                    RED_SOFT,
+                    ACCENT_SOFT,
+                ),
+            ),
+        ),
+        border=rx.cond(
+            sync_state == "fresh",
+            "1px solid rgba(34,197,94,0.16)",
+            rx.cond(
+                sync_state == "stale",
+                "1px solid rgba(245,158,11,0.18)",
+                rx.cond(
+                    sync_state == "failed",
+                    "1px solid rgba(239,68,68,0.18)",
+                    "1px solid rgba(148,163,184,0.16)",
+                ),
+            ),
+        ),
+        width="100%",
+    )
 
 
 def campaign_card(campaign: dict) -> rx.Component:
@@ -38,6 +188,7 @@ def campaign_card(campaign: dict) -> rx.Component:
     booked = campaign["booked"].to(int)
     completed_all = campaign["completed_all"].to(int)
     device_types_display = campaign["device_types_display"].to(str)
+    sync_state = campaign["sync_health_state"].to(str)
 
     booked_pct = rx.cond(goal > 0, (booked * 100 / goal).to(int), 0)
     completed_pct = rx.cond(goal > 0, (completed_all * 100 / goal).to(int), 0)
@@ -48,7 +199,19 @@ def campaign_card(campaign: dict) -> rx.Component:
             rx.box(
                 width="100%",
                 height="3px",
-                background=ACCENT_GRADIENT_H,
+                background=rx.cond(
+                    sync_state == "failed",
+                    "linear-gradient(90deg, #ef4444, #f97316)",
+                    rx.cond(
+                        sync_state == "stale",
+                        "linear-gradient(90deg, #f59e0b, #f97316)",
+                        rx.cond(
+                            sync_state == "never",
+                            "linear-gradient(90deg, #94a3b8, #cbd5e1)",
+                            ACCENT_GRADIENT_H,
+                        ),
+                    ),
+                ),
                 border_radius="16px 16px 0 0",
                 opacity="0.7",
             ),
@@ -130,6 +293,7 @@ def campaign_card(campaign: dict) -> rx.Component:
                     ),
                     rx.fragment(),
                 ),
+                _sync_health_panel(campaign),
                 rx.spacer(),
                 # -- Today's activity pills
                 rx.hstack(
@@ -166,18 +330,46 @@ def campaign_card(campaign: dict) -> rx.Component:
             # -- Card chrome
             border_radius=RADIUS_LG,
             background=CARD_BG,
-            border=BORDER,
+            border=rx.cond(
+                sync_state == "failed",
+                "1px solid rgba(239,68,68,0.18)",
+                rx.cond(
+                    sync_state == "stale",
+                    "1px solid rgba(245,158,11,0.18)",
+                    rx.cond(
+                        sync_state == "never",
+                        "1px solid rgba(148,163,184,0.18)",
+                        BORDER,
+                    ),
+                ),
+            ),
             backdrop_filter="blur(16px) saturate(180%)",
-            box_shadow=SHADOW_SM,
-            min_height="260px",
+            box_shadow=rx.cond(
+                sync_state == "failed",
+                "0 10px 24px rgba(239,68,68,0.10)",
+                rx.cond(
+                    sync_state == "stale",
+                    "0 10px 24px rgba(245,158,11,0.10)",
+                    SHADOW_SM,
+                ),
+            ),
+            min_height="340px",
             overflow="hidden",
             transition=TRANSITION,
             cursor="pointer",
             _hover={
                 **HOVER_LIFT,
-                "border_color": rx.color_mode_cond(
-                    light="rgba(99,102,241,0.18)",
-                    dark="rgba(139,92,246,0.25)",
+                "border_color": rx.cond(
+                    sync_state == "failed",
+                    "rgba(239,68,68,0.28)",
+                    rx.cond(
+                        sync_state == "stale",
+                        "rgba(245,158,11,0.28)",
+                        rx.color_mode_cond(
+                            light="rgba(99,102,241,0.18)",
+                            dark="rgba(139,92,246,0.25)",
+                        ),
+                    ),
                 ),
             },
         ),

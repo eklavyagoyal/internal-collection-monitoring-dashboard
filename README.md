@@ -42,6 +42,7 @@ Built with **Reflex** (Python → React + FastAPI), **MongoDB** (async via Motor
 | Feature | Detail |
 |---|---|
 | **Real-Time Multi-User** | 10-second auto-refresh via MongoDB, pushed to all clients over WebSocket |
+| **Freshness Signals** | Navbar + campaign cards distinguish live refresh, stale syncs, failed attempts, and never-synced campaigns |
 | **Date Navigation** | Visible `Previous / Today / Next` day context on dashboard and campaign detail pages |
 | **Dark / Light Mode** | Toggle with a single click |
 | **Configurable Labels** | Add/remove platforms and model tags from Settings — no redeploy needed |
@@ -187,8 +188,20 @@ reflex run
 ### Calendar Sync
 Each **Sync** call runs as a `@rx.event(background=True)` handler, offloading the Google API call via `asyncio.to_thread` to avoid blocking the event loop. Events are upserted with `$set` (calendar fields) + `$setOnInsert` (manual fields), keyed on `google_event_id` — so editing notes or status is always safe across re-syncs.
 
+Every campaign now tracks:
+- the **last attempted sync**
+- the **last successful sync**
+- the **last sync error** (if the most recent attempt failed)
+
+That lets the UI keep failed campaigns red until a real successful refresh clears the error, instead of silently drifting back to a reassuring green state.
+
 ### Real-Time Multi-User
 A background loop polls MongoDB every **10 seconds** and pushes fresh state to all connected clients via Reflex's WebSocket manager. **Redis** backs the state manager so every browser tab and device stays in sync instantly.
+
+The navbar uses that refresh loop for a truthful live-status badge:
+- **Live data** only appears after a recent successful refresh
+- **Refresh delayed** appears when the live view is older than expected
+- **Refresh error** appears when the last refresh attempt failed after the last known good refresh
 
 ### Design System
 All colours, shadows, radii, and component helpers live in `components/design_tokens.py` — `glass_card()`, `section_header()`, `form_field()`, `progress_bar()`, `status_dot()` — used consistently across every page.
@@ -215,6 +228,7 @@ All colours, shadows, radii, and component helpers live in `components/design_to
 - Bulk selection follows the current visible filtered view, so hidden rows are never changed by accident
 - Row-level platform, model, status, notes, and issue updates save optimistically and show lightweight save feedback
 - Issue comments are distinct from routine notes and stay included in CSV exports
+- Changing the selected day clears old date-scoped sync banners so the page never looks fresher than the current view really is
 
 ---
 
@@ -223,7 +237,10 @@ All colours, shadows, radii, and component helpers live in `components/design_to
 | Symptom | Fix |
 |---|---|
 | `credentials.json not found` | Download OAuth Desktop-app credentials from Google Cloud Console |
+| `No valid token.json` in Docker / headless mode | Run `python generate_token.py` on a machine with a browser, then retry the sync |
 | Token refresh error | Delete `token.json` and re-run `python generate_token.py` |
+| Calendar not found / 404 during sync | Check the campaign calendar ID and confirm the Google account can access it |
+| Permission denied / 403 during sync | Re-authorize Google Calendar access and confirm the account can read the configured calendar |
 | MongoDB connection timeout | Verify Mongo container is healthy and `MONGO_URI` is correct in `.env` |
 | Empty participant list | Click **Sync Calendar** on the campaign detail page |
 | Changes not visible on another device | Confirm Redis is running and `REDIS_URL` is set |

@@ -278,6 +278,11 @@ async def create_campaign(data: dict) -> str:
         "calendar_filter": data.get("calendar_filter", ""),
         "status": "active",
         "last_sync_at": None,
+        "last_sync_attempt_at": None,
+        "last_sync_success_at": None,
+        "last_sync_error_code": "",
+        "last_sync_error": "",
+        "last_sync_error_detail": "",
         "created_at": now,
         "updated_at": now,
     })
@@ -316,6 +321,15 @@ def _backfill_campaign(doc: dict) -> dict:
     doc.setdefault("notion_url", "")
     doc.setdefault("linear_url", "")
     doc.setdefault("deadline", "")
+    legacy_last_sync = doc.get("last_sync_at")
+    doc.setdefault("last_sync_success_at", legacy_last_sync)
+    doc.setdefault(
+        "last_sync_attempt_at",
+        doc.get("last_sync_success_at") or legacy_last_sync,
+    )
+    doc.setdefault("last_sync_error_code", "")
+    doc.setdefault("last_sync_error", "")
+    doc.setdefault("last_sync_error_detail", "")
     # Backfill: migrate legacy device_type (str) to device_types (list)
     if "device_types" not in doc:
         legacy = doc.pop("device_type", "")
@@ -363,6 +377,38 @@ async def update_campaign_field(campaign_id: str, field: str, value: Any) -> Non
     await _campaigns().update_one(
         {"campaign_id": campaign_id},
         {"$set": {field: value, "updated_at": now}},
+    )
+
+
+async def update_campaign_sync_state(
+    campaign_id: str,
+    *,
+    attempt_at: str | None = None,
+    success_at: str | None = None,
+    error_code: str | None = None,
+    error_summary: str | None = None,
+    error_detail: str | None = None,
+) -> None:
+    """Persist sync attempt/success metadata without losing the last good sync."""
+    now = datetime.now(timezone.utc).isoformat()
+    sets: dict[str, Any] = {"updated_at": now}
+
+    if attempt_at is not None:
+        sets["last_sync_attempt_at"] = attempt_at
+    if success_at is not None:
+        sets["last_sync_success_at"] = success_at
+        # Keep the legacy field aligned with the last successful sync.
+        sets["last_sync_at"] = success_at
+    if error_code is not None:
+        sets["last_sync_error_code"] = error_code
+    if error_summary is not None:
+        sets["last_sync_error"] = error_summary
+    if error_detail is not None:
+        sets["last_sync_error_detail"] = error_detail
+
+    await _campaigns().update_one(
+        {"campaign_id": campaign_id},
+        {"$set": sets},
     )
 
 

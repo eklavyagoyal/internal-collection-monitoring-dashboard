@@ -11,4 +11,5 @@ config = rx.Config(
     app_name="nexus_track",
     api_url=os.getenv("API_URL", "http://localhost:5001"),
     state_manager_redis_url=os.getenv("REDIS_URL"),
+    disable_plugins=["reflex.plugins.sitemap.SitemapPlugin"],
 )

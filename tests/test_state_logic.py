@@ -10,6 +10,8 @@ import pytest
 from datetime import datetime
 
 from nexus_track.state import (
+    _build_app_refresh_health,
+    _build_campaign_sync_health,
     _build_export_filename,
     _build_range_sync_result_message,
     _build_sync_result_message,
@@ -25,6 +27,7 @@ from nexus_track.state import (
     _issue_summary_label,
     _participant_empty_state,
     _participants_for_scope,
+    _resolve_sync_error,
 )
 
 
@@ -92,14 +95,12 @@ class _MockState:
 
     @property
     def campaign_last_sync(self) -> str:
-        raw = self.current_campaign.get("last_sync_at", "")
-        if not raw:
-            return ""
-        try:
-            dt = datetime.fromisoformat(raw)
-            return dt.strftime("%b %d, %H:%M")
-        except Exception:
-            return raw
+        return str(
+            _build_campaign_sync_health(self.current_campaign).get(
+                "sync_last_success_display",
+                "Never",
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +221,7 @@ class TestDisplayDateLabel:
 class TestLastSync:
     def test_empty(self):
         s = _MockState({})
-        assert s.campaign_last_sync == ""
+        assert s.campaign_last_sync == "Never"
 
     def test_iso_format(self):
         s = _MockState({"last_sync_at": "2024-06-15T14:30:00+00:00"})
@@ -231,6 +232,124 @@ class TestLastSync:
     def test_invalid_returns_raw(self):
         s = _MockState({"last_sync_at": "bad-date"})
         assert s.campaign_last_sync == "bad-date"
+
+
+class TestCampaignSyncHealthHelpers:
+    def test_never_synced_campaign_needs_attention(self):
+        sync = _build_campaign_sync_health({}, now=datetime(2026, 3, 23, 12, 0, 0))
+
+        assert sync["sync_health_state"] == "never"
+        assert sync["sync_health_label"] == "Never synced"
+        assert sync["sync_needs_attention"] is True
+        assert sync["sync_last_success_display"] == "Never"
+
+    def test_recent_success_is_fresh(self):
+        sync = _build_campaign_sync_health(
+            {"last_sync_success_at": "2026-03-23T11:30:00"},
+            now=datetime(2026, 3, 23, 12, 0, 0),
+        )
+
+        assert sync["sync_health_state"] == "fresh"
+        assert sync["sync_health_label"] == "Fresh"
+        assert sync["sync_needs_attention"] is False
+        assert "11:30" in str(sync["sync_last_success_display"])
+
+    def test_old_success_is_stale(self):
+        sync = _build_campaign_sync_health(
+            {"last_sync_success_at": "2026-03-23T09:30:00"},
+            now=datetime(2026, 3, 23, 12, 0, 0),
+        )
+
+        assert sync["sync_health_state"] == "stale"
+        assert sync["sync_health_label"] == "Stale"
+        assert sync["sync_needs_attention"] is True
+        assert "Refresh this campaign" in str(sync["sync_secondary_message"])
+
+    def test_failed_attempt_stays_red_until_a_new_success(self):
+        sync = _build_campaign_sync_health(
+            {
+                "last_sync_success_at": "2026-03-23T10:00:00",
+                "last_sync_attempt_at": "2026-03-23T11:45:00",
+                "last_sync_error_code": "missing_token",
+                "last_sync_error": "Google token is missing for this environment.",
+                "last_sync_error_detail": "No valid token.json - cannot open browser in Docker.",
+            },
+            now=datetime(2026, 3, 23, 12, 0, 0),
+        )
+
+        assert sync["sync_health_state"] == "failed"
+        assert sync["sync_health_label"] == "Sync failed"
+        assert sync["sync_needs_attention"] is True
+        assert sync["sync_show_last_attempt"] is True
+        assert "Google token is missing" in str(sync["sync_primary_message"])
+        assert "Last successful sync" in str(sync["sync_last_success_primary"])
+
+
+class TestSyncErrorGuidance:
+    def test_missing_token_error_maps_to_actionable_guidance(self):
+        guidance = _resolve_sync_error(
+            "No valid token.json - cannot open browser in Docker.",
+        )
+
+        assert guidance["code"] == "missing_token"
+        assert "Google token is missing" in guidance["summary"]
+        assert "generate_token.py" in guidance["action"]
+
+    def test_missing_credentials_error_maps_to_project_root_action(self):
+        guidance = _resolve_sync_error(
+            "credentials.json not found. Download OAuth 2.0 Desktop credentials from Google Cloud Console.",
+        )
+
+        assert guidance["code"] == "missing_credentials"
+        assert "credentials are missing" in guidance["summary"]
+        assert "project root" in guidance["action"]
+
+
+class TestAppRefreshHealth:
+    def test_live_refresh_requires_recent_success(self):
+        health = _build_app_refresh_health(
+            "2026-03-23T11:59:45",
+            "",
+            "",
+            now=datetime(2026, 3, 23, 12, 0, 0),
+        )
+
+        assert health["state"] == "live"
+        assert health["label"] == "Live data"
+
+    def test_old_refresh_is_delayed(self):
+        health = _build_app_refresh_health(
+            "2026-03-23T11:57:00",
+            "",
+            "",
+            now=datetime(2026, 3, 23, 12, 0, 0),
+        )
+
+        assert health["state"] == "delayed"
+        assert health["label"] == "Refresh delayed"
+
+    def test_newer_error_than_refresh_stays_red(self):
+        health = _build_app_refresh_health(
+            "2026-03-23T11:55:00",
+            "2026-03-23T11:59:30",
+            "Mongo refresh failed",
+            now=datetime(2026, 3, 23, 12, 2, 0),
+        )
+
+        assert health["state"] == "error"
+        assert health["label"] == "Refresh error"
+        assert "Mongo refresh failed" in health["title"]
+
+    def test_recent_error_does_not_flip_back_to_live_without_new_success(self):
+        health = _build_app_refresh_health(
+            "2026-03-23T11:59:55",
+            "2026-03-23T12:00:05",
+            "Mongo refresh failed",
+            now=datetime(2026, 3, 23, 12, 0, 10),
+        )
+
+        assert health["state"] == "error"
+        assert health["label"] == "Refresh error"
 
 
 class TestParticipantAggregationHelpers:

@@ -14,6 +14,7 @@ import logging
 from datetime import datetime, timedelta
 
 import reflex as rx
+from pydantic import BaseModel
 
 from .backend.gcal_sync import list_calendars, sync_calendar_for_campaign, sync_campaign_date_range
 from .backend.mongo_client import (
@@ -39,6 +40,7 @@ from .backend.mongo_client import (
     set_admin_pin as db_set_admin_pin,
     update_campaign as db_update_campaign,
     update_campaign_field as db_update_campaign_field,
+    update_campaign_sync_state as db_update_campaign_sync_state,
     update_label_list,
     update_participant_field as db_update_field,
     update_participant_status as db_update_status,
@@ -49,6 +51,130 @@ from .backend.mongo_client import (
 log = logging.getLogger(__name__)
 
 _auto_refresh_running = False
+APP_REFRESH_LIVE_SECONDS = 35
+APP_REFRESH_DELAY_SECONDS = 90
+CAMPAIGN_SYNC_STALE_MINUTES = 60
+
+
+def _normalize_local_datetime(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.astimezone().replace(tzinfo=None)
+    return value
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return _normalize_local_datetime(datetime.fromisoformat(raw))
+    except Exception:
+        return None
+
+
+def _relative_time_label(
+    value: str | datetime | None,
+    *,
+    now: datetime | None = None,
+) -> str:
+    dt = _parse_timestamp(value) if isinstance(value, str) else value
+    if dt is None:
+        return ""
+
+    current = _normalize_local_datetime(now or datetime.now())
+    delta_seconds = max(0, int((current - _normalize_local_datetime(dt)).total_seconds()))
+    if delta_seconds < 45:
+        return "just now"
+    if delta_seconds < 3600:
+        minutes = max(1, delta_seconds // 60)
+        return f"{minutes}m ago"
+    if delta_seconds < 86_400:
+        hours = max(1, delta_seconds // 3600)
+        return f"{hours}h ago"
+    days = max(1, delta_seconds // 86_400)
+    return f"{days}d ago"
+
+
+def _sync_timestamp_display(
+    value: str | None,
+    *,
+    now: datetime | None = None,
+    empty: str = "Never",
+) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return empty
+    normalized_dt = _parse_timestamp(raw)
+    if normalized_dt is None:
+        return raw
+    try:
+        display_dt = datetime.fromisoformat(raw)
+    except Exception:
+        display_dt = normalized_dt
+    return (
+        display_dt.strftime("%b %d, %H:%M")
+        + " ("
+        + _relative_time_label(normalized_dt, now=now)
+        + ")"
+    )
+
+
+def _resolve_sync_error(
+    message: str,
+    *,
+    error_code: str = "",
+) -> dict[str, str]:
+    raw = str(message or "").strip()
+    lower = raw.lower()
+    code = str(error_code or "").strip().lower()
+
+    if code == "missing_credentials" or "credentials.json not found" in lower:
+        return {
+            "code": "missing_credentials",
+            "summary": "Google credentials are missing.",
+            "action": "Add credentials.json at the project root, then retry the sync.",
+        }
+    if code == "missing_token" or "no valid token.json" in lower:
+        return {
+            "code": "missing_token",
+            "summary": "Google token is missing for this environment.",
+            "action": "Run `python generate_token.py` on a machine with a browser, then retry the sync.",
+        }
+    if code == "token_refresh_failed" or "invalid_grant" in lower:
+        return {
+            "code": "token_refresh_failed",
+            "summary": "Google token refresh failed.",
+            "action": "Delete token.json, rerun `python generate_token.py`, then retry the sync.",
+        }
+    if code == "permission_denied" or "permission denied" in lower or "forbidden" in lower or "403" in lower:
+        return {
+            "code": "permission_denied",
+            "summary": "Google Calendar access was denied.",
+            "action": "Re-authorize the Google account and confirm it has read access to the configured calendar.",
+        }
+    if code == "calendar_not_found" or ("calendar" in lower and "not found" in lower) or "404" in lower:
+        return {
+            "code": "calendar_not_found",
+            "summary": "Configured calendar could not be found.",
+            "action": "Check the campaign calendar ID and confirm the Google account can see that calendar.",
+        }
+    if code == "missing_date_range" or "select both start and end dates" in lower:
+        return {
+            "code": "missing_date_range",
+            "summary": "Choose both a start date and an end date before syncing a range.",
+            "action": "Set both dates, then retry the range sync.",
+        }
+    if code == "campaign_missing" or "no campaign loaded" in lower:
+        return {
+            "code": "campaign_missing",
+            "summary": "The campaign page lost its loaded context.",
+            "action": "Reload the page, then retry the sync.",
+        }
+    return {
+        "code": code or "generic_sync_error",
+        "summary": "Calendar sync failed.",
+        "action": "Review Google credentials, calendar access, and campaign filters, then retry the sync.",
+    }
 
 
 def _to_plain_python(obj):
@@ -321,6 +447,212 @@ def _build_export_result_message(
     return f"Prepared {filename} for {scope_label} ({row_count} {row_word})."
 
 
+def _build_campaign_sync_health(
+    campaign: dict,
+    *,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    current = _normalize_local_datetime(now or datetime.now())
+    last_success_raw = str(
+        campaign.get("last_sync_success_at")
+        or campaign.get("last_sync_at")
+        or "",
+    ).strip()
+    last_attempt_raw = str(
+        campaign.get("last_sync_attempt_at")
+        or last_success_raw
+        or "",
+    ).strip()
+    last_success_dt = _parse_timestamp(last_success_raw)
+    last_attempt_dt = _parse_timestamp(last_attempt_raw)
+
+    raw_error_code = str(campaign.get("last_sync_error_code", "") or "").strip()
+    raw_error_summary = str(campaign.get("last_sync_error", "") or "").strip()
+    raw_error_detail = str(campaign.get("last_sync_error_detail", "") or "").strip()
+    has_error_marker = bool(raw_error_code or raw_error_summary or raw_error_detail)
+    error_context = (
+        _resolve_sync_error(
+            raw_error_detail or raw_error_summary,
+            error_code=raw_error_code,
+        )
+        if has_error_marker
+        else {"code": "", "summary": "", "action": ""}
+    )
+    error_summary = raw_error_summary or error_context["summary"]
+    error_action = error_context["action"]
+
+    failure_active = bool(error_summary) and (
+        (last_attempt_dt is not None and (last_success_dt is None or last_attempt_dt >= last_success_dt))
+        or (not last_attempt_raw and not last_success_raw)
+    )
+    show_last_attempt = bool(
+        last_attempt_raw and (failure_active or last_attempt_raw != last_success_raw)
+    )
+    last_success_display = _sync_timestamp_display(
+        last_success_raw,
+        now=current,
+        empty="Never",
+    )
+    last_attempt_display = _sync_timestamp_display(
+        last_attempt_raw,
+        now=current,
+        empty="Never",
+    )
+
+    if failure_active:
+        last_success_primary = (
+            "No successful sync recorded yet."
+            if last_success_display == "Never"
+            else "Last successful sync " + last_success_display + "."
+        )
+        return {
+            "sync_health_state": "failed",
+            "sync_health_label": "Sync failed",
+            "sync_primary_message": error_summary,
+            "sync_secondary_message": error_action,
+            "sync_last_success_display": last_success_display,
+            "sync_last_attempt_display": last_attempt_display,
+            "sync_show_last_attempt": show_last_attempt,
+            "sync_last_success_primary": last_success_primary,
+            "sync_error_summary": error_summary,
+            "sync_error_action": error_action,
+            "sync_error_detail": raw_error_detail,
+            "sync_needs_attention": True,
+        }
+
+    if not last_success_raw:
+        return {
+            "sync_health_state": "never",
+            "sync_health_label": "Never synced",
+            "sync_primary_message": "No successful sync recorded yet.",
+            "sync_secondary_message": (
+                "Run a sync to load bookings before trusting participant counts."
+            ),
+            "sync_last_success_display": "Never",
+            "sync_last_attempt_display": last_attempt_display,
+            "sync_show_last_attempt": False,
+            "sync_last_success_primary": "No successful sync recorded yet.",
+            "sync_error_summary": "",
+            "sync_error_action": "",
+            "sync_error_detail": "",
+            "sync_needs_attention": True,
+        }
+
+    if last_success_dt is None:
+        return {
+            "sync_health_state": "stale",
+            "sync_health_label": "Stale",
+            "sync_primary_message": "Last successful sync " + last_success_display + ".",
+            "sync_secondary_message": (
+                "Refresh this campaign to restore a valid freshness signal."
+            ),
+            "sync_last_success_display": last_success_display,
+            "sync_last_attempt_display": last_attempt_display,
+            "sync_show_last_attempt": show_last_attempt,
+            "sync_last_success_primary": "Last successful sync " + last_success_display + ".",
+            "sync_error_summary": "",
+            "sync_error_action": "",
+            "sync_error_detail": "",
+            "sync_needs_attention": True,
+        }
+
+    age_minutes = max(
+        0,
+        int((current - last_success_dt).total_seconds() // 60),
+    )
+    is_stale = age_minutes > CAMPAIGN_SYNC_STALE_MINUTES
+    primary = "Last successful sync " + last_success_display + "."
+    secondary = (
+        "Refresh this campaign before using participant counts."
+        if is_stale
+        else ""
+    )
+    return {
+        "sync_health_state": "stale" if is_stale else "fresh",
+        "sync_health_label": "Stale" if is_stale else "Fresh",
+        "sync_primary_message": primary,
+        "sync_secondary_message": secondary,
+        "sync_last_success_display": last_success_display,
+        "sync_last_attempt_display": last_attempt_display,
+        "sync_show_last_attempt": show_last_attempt,
+        "sync_last_success_primary": primary,
+        "sync_error_summary": "",
+        "sync_error_action": "",
+        "sync_error_detail": "",
+        "sync_needs_attention": is_stale,
+    }
+
+
+def _decorate_campaign_with_sync_health(
+    campaign: dict,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    row = dict(_to_plain_python(campaign) or {})
+    row.update(_build_campaign_sync_health(row, now=now))
+    return row
+
+
+def _build_app_refresh_health(
+    last_refresh_at: str,
+    last_error_at: str,
+    last_error: str,
+    *,
+    is_loading: bool = False,
+    is_syncing: bool = False,
+    now: datetime | None = None,
+) -> dict[str, str]:
+    current = _normalize_local_datetime(now or datetime.now())
+    refresh_dt = _parse_timestamp(last_refresh_at)
+    error_dt = _parse_timestamp(last_error_at)
+    error_active = bool(str(last_error or "").strip()) and (
+        error_dt is not None
+        and (refresh_dt is None or error_dt >= refresh_dt)
+    )
+
+    if is_syncing:
+        label = "Syncing"
+        detail = "Applying calendar changes."
+        state = "syncing"
+    elif is_loading and refresh_dt is None:
+        label = "Loading"
+        detail = "Waiting for the first data load."
+        state = "loading"
+    elif refresh_dt is None:
+        label = "Refresh error" if error_active else "Connecting"
+        detail = (
+            "Live refresh has not loaded data yet."
+            if error_active
+            else "Waiting for the first live refresh."
+        )
+        state = "error" if error_active else "loading"
+    else:
+        age_seconds = max(0, int((current - refresh_dt).total_seconds()))
+        age_label = _relative_time_label(refresh_dt, now=current)
+        if error_active:
+            label = "Refresh error"
+            detail = "Last good refresh " + age_label + "."
+            state = "error"
+        elif age_seconds <= APP_REFRESH_LIVE_SECONDS:
+            label = "Live data"
+            detail = "Updated " + age_label + "."
+            state = "live"
+        else:
+            label = "Refresh delayed"
+            detail = "Last refresh " + age_label + "."
+            state = "delayed"
+
+    title = label + " - " + detail
+    if error_active and str(last_error or "").strip():
+        title += " Last refresh error: " + str(last_error).strip()
+    return {
+        "state": state,
+        "label": label,
+        "detail": detail,
+        "title": title,
+    }
+
+
 def _rows_for_export(participants: list[dict]) -> list[dict]:
     rows: list[dict] = []
     for participant in participants:
@@ -338,14 +670,14 @@ def _rows_for_export(participants: list[dict]) -> list[dict]:
     return rows
 
 
-class BreakdownModel(rx.Base):
+class BreakdownModel(BaseModel):
     model: str = ""
     total: int = 0
     completed: int = 0
     pct: int = 0
 
 
-class BreakdownPlatform(rx.Base):
+class BreakdownPlatform(BaseModel):
     platform: str = ""
     total: int = 0
     completed: int = 0
@@ -355,18 +687,18 @@ class BreakdownPlatform(rx.Base):
     models: list[BreakdownModel] = []
 
 
-class PlatformModelConfig(rx.Base):
+class PlatformModelConfig(BaseModel):
     platform: str = ""
     tags: list[str] = []
     input_value: str = ""
 
 
-class PlatformOption(rx.Base):
+class PlatformOption(BaseModel):
     name: str = ""
     selected: bool = False
 
 
-class AuditEvent(rx.Base):
+class AuditEvent(BaseModel):
     timestamp: str = ""
     summary: str = ""
     action: str = ""
@@ -399,6 +731,9 @@ class NexusState(rx.State):
 
     # LOADING STATE
     is_loading: bool = False
+    last_data_refresh_at: str = ""
+    last_data_refresh_error_at: str = ""
+    last_data_refresh_error: str = ""
 
     # DASHBOARD
     campaigns: list[dict] = []
@@ -456,6 +791,8 @@ class NexusState(rx.State):
     last_sync_result: str = ""
     last_export_result: str = ""
     sync_error: str = ""
+    sync_error_action: str = ""
+    sync_error_detail: str = ""
     detail_error: str = ""
 
     # CAMPAIGN FORM
@@ -852,6 +1189,10 @@ class NexusState(rx.State):
         return "Save Issue"
 
     @rx.var(cache=True)
+    def current_campaign_sync_health(self) -> dict[str, object]:
+        return _build_campaign_sync_health(self.current_campaign)
+
+    @rx.var(cache=True)
     def campaign_deadline(self) -> str:
         raw = self.current_campaign.get("deadline", "")
         if not raw:
@@ -902,14 +1243,7 @@ class NexusState(rx.State):
 
     @rx.var(cache=True)
     def campaign_last_sync(self) -> str:
-        raw = self.current_campaign.get("last_sync_at", "")
-        if not raw:
-            return "Never"
-        try:
-            dt = datetime.fromisoformat(raw)
-            return dt.strftime("%b %d %H:%M")
-        except Exception:
-            return str(raw)
+        return str(self.current_campaign_sync_health.get("sync_last_success_display", "Never"))
 
     @rx.var(cache=True)
     def campaign_calendar_filter(self) -> str:
@@ -1065,7 +1399,47 @@ class NexusState(rx.State):
             )
         # default: created_at (already sorted from DB)
 
-        return items
+        return [
+            _decorate_campaign_with_sync_health(campaign)
+            for campaign in items
+        ]
+
+    @rx.var(cache=True)
+    def visible_campaign_sync_attention_count(self) -> int:
+        return sum(
+            1
+            for campaign in self.filtered_campaigns
+            if campaign.get("sync_needs_attention")
+        )
+
+    @rx.var(cache=True)
+    def dashboard_sync_attention_state(self) -> str:
+        campaigns = self.filtered_campaigns
+        if any(campaign.get("sync_health_state") == "failed" for campaign in campaigns):
+            return "failed"
+        if self.visible_campaign_sync_attention_count > 0:
+            return "warning"
+        return "ok"
+
+    @rx.var(cache=True)
+    def dashboard_sync_attention_label(self) -> str:
+        visible_campaigns = len(self.filtered_campaigns)
+        if visible_campaigns == 0:
+            return "No visible campaigns in this view."
+        count = self.visible_campaign_sync_attention_count
+        if count == 0:
+            return "All visible campaigns have a recent successful sync."
+        if count == 1:
+            return "1 visible campaign needs sync attention."
+        return f"{count} visible campaigns need sync attention."
+
+    @rx.var(cache=True)
+    def dashboard_sync_attention_detail(self) -> str:
+        if len(self.filtered_campaigns) == 0:
+            return "Adjust filters or create a campaign to review freshness."
+        if self.visible_campaign_sync_attention_count == 0:
+            return "Fresh cards are safe to trust at a glance."
+        return "Refresh stale or failed campaigns before relying on their participant counts."
 
     @rx.var(cache=True)
     def display_date_label(self) -> str:
@@ -1081,6 +1455,16 @@ class NexusState(rx.State):
     @rx.var(cache=True)
     def selected_date_iso(self) -> str:
         return self.selected_date or datetime.now().strftime("%Y-%m-%d")
+
+    @rx.var(cache=True)
+    def app_refresh_health(self) -> dict[str, str]:
+        return _build_app_refresh_health(
+            self.last_data_refresh_at,
+            self.last_data_refresh_error_at,
+            self.last_data_refresh_error,
+            is_loading=self.is_loading,
+            is_syncing=self.is_syncing,
+        )
 
     # SETTINGS / LABELS
 
@@ -1333,6 +1717,47 @@ class NexusState(rx.State):
 
     def _clear_export_feedback(self) -> None:
         self.last_export_result = ""
+
+    def _clear_sync_feedback(self) -> None:
+        self.last_sync_result = ""
+        self.range_sync_result = ""
+        self.sync_error = ""
+        self.sync_error_action = ""
+        self.sync_error_detail = ""
+
+    def _mark_data_refresh_success(self, timestamp: str | None = None) -> None:
+        self.last_data_refresh_at = timestamp or datetime.now().isoformat()
+        self.last_data_refresh_error = ""
+        self.last_data_refresh_error_at = ""
+
+    def _mark_data_refresh_error(self, message: str) -> None:
+        self.last_data_refresh_error = str(message or "").strip() or "Live refresh failed."
+        self.last_data_refresh_error_at = datetime.now().isoformat()
+
+    def _set_current_campaign_sync_state(
+        self,
+        *,
+        attempt_at: str | None = None,
+        success_at: str | None = None,
+        error_context: dict[str, str] | None = None,
+        error_detail: str = "",
+    ) -> None:
+        if not self.current_campaign:
+            return
+        campaign = dict(self.current_campaign)
+        if attempt_at is not None:
+            campaign["last_sync_attempt_at"] = attempt_at
+        if success_at is not None:
+            campaign["last_sync_success_at"] = success_at
+            campaign["last_sync_at"] = success_at
+            campaign["last_sync_error_code"] = ""
+            campaign["last_sync_error"] = ""
+            campaign["last_sync_error_detail"] = ""
+        elif error_context is not None:
+            campaign["last_sync_error_code"] = error_context.get("code", "")
+            campaign["last_sync_error"] = error_context.get("summary", "")
+            campaign["last_sync_error_detail"] = error_detail
+        self.current_campaign = campaign
 
     def set_new_platform(self, v: str):
         self.new_platform = v
@@ -1609,11 +2034,18 @@ class NexusState(rx.State):
         self._sync_selection_state()
         self._clear_export_feedback()
 
+    def set_bookings_collapsed(self, value: bool):
+        self.bookings_collapsed = value
+
+    def set_completed_collapsed(self, value: bool):
+        self.completed_collapsed = value
+
     # DATE NAVIGATION
 
     def go_to_today(self):
         self.selected_date = ""
         self._sync_selection_state()
+        self._clear_sync_feedback()
         self._clear_export_feedback()
 
     def go_prev_day(self):
@@ -1621,6 +2053,7 @@ class NexusState(rx.State):
         prev = datetime.strptime(d, "%Y-%m-%d") - timedelta(days=1)
         self.selected_date = prev.strftime("%Y-%m-%d")
         self._sync_selection_state()
+        self._clear_sync_feedback()
         self._clear_export_feedback()
 
     def go_next_day(self):
@@ -1628,11 +2061,13 @@ class NexusState(rx.State):
         nxt = datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1)
         self.selected_date = nxt.strftime("%Y-%m-%d")
         self._sync_selection_state()
+        self._clear_sync_feedback()
         self._clear_export_feedback()
 
     def set_date(self, date_str: str):
         self.selected_date = date_str
         self._sync_selection_state()
+        self._clear_sync_feedback()
         self._clear_export_feedback()
 
     async def _reload_participants(self):
@@ -1683,17 +2118,23 @@ class NexusState(rx.State):
 
     async def load_campaigns(self):
         self.is_loading = True
-        await ensure_indexes()
-        await self.load_settings()
-        date = self._get_date()
-        self.campaigns = await get_all_campaigns_with_stats(
-            date, include_archived=self.show_archived,
-        )
-        counts = await count_all_campaigns()
-        self.all_campaigns_count = counts["total"]
-        self.all_active_count = counts["active"]
-        self.all_completed_count = counts["completed"]
-        self.is_loading = False
+        try:
+            await ensure_indexes()
+            await self.load_settings()
+            date = self._get_date()
+            self.campaigns = await get_all_campaigns_with_stats(
+                date, include_archived=self.show_archived,
+            )
+            counts = await count_all_campaigns()
+            self.all_campaigns_count = counts["total"]
+            self.all_active_count = counts["active"]
+            self.all_completed_count = counts["completed"]
+            self._mark_data_refresh_success()
+        except Exception as exc:
+            self._mark_data_refresh_error(str(exc))
+            raise
+        finally:
+            self.is_loading = False
 
     def set_campaign_search(self, q: str):
         self.campaign_search_query = q
@@ -1706,59 +2147,63 @@ class NexusState(rx.State):
 
     async def load_campaign_detail(self):
         self.is_loading = True
-        cid = self.router.page.params.get("campaign_id", "")
-        self.active_campaign_id = cid
-        self.search_query = ""
-        self.sync_error = ""
-        self.detail_error = ""
-        self.last_sync_result = ""
-        self.last_export_result = ""
-        self.range_sync_result = ""
-        self.bulk_platform_value = ""
-        self.bulk_model_value = ""
-        self.participant_scope_mode = "selected_day"
-        self.show_delete_dialog = False
-        self.show_delete_participant_dialog = False
-        self.delete_participant_event_id = ""
-        self.delete_participant_name = ""
-        self.show_bulk_delete_dialog = False
-        self.show_edit_participant = False
-        self.edit_participant_eid = ""
-        self.edit_participant_name = ""
-        self.edit_participant_email = ""
-        self.edit_participant_date = ""
-        self.edit_participant_time = ""
-        self.show_add_participant = False
-        self.editing_issue_event_id = ""
-        self.editing_issue_comment = ""
-        self.selected_ids = []
-        self.sort_field = "appointment_time"
-        self.sort_dir = "asc"
-        # Reset participant filters
-        self.filter_platform = ""
-        self.filter_status = ""
-        self.filter_date = ""
-        self.filter_has_issue = False
-        if not self.selected_date:
-            self.selected_date = datetime.now().strftime("%Y-%m-%d")
-        self.sync_start_date = self.selected_date_iso
-        self.sync_end_date = self.selected_date_iso
-        if cid:
-            await self.load_settings()
-            campaign = await get_campaign(cid)
-            if campaign:
-                self.current_campaign = campaign
-                fresh = await get_participants_for_campaign(cid)
-                self._set_loaded_participants(fresh, preserve_selection=False)
-                self.device_breakdown_open = True
-                self.expanded_platform_panels = self._all_visible_platforms()
-            else:
-                self.current_campaign = {}
-                self.participants = self._decorate_participants_for_ui([])
-                self.per_device_stats = {}
-                self.platform_model_breakdown = {}
-                self.expanded_platform_panels = []
-        self.is_loading = False
+        try:
+            cid = self.router.page.params.get("campaign_id", "")
+            self.active_campaign_id = cid
+            self.search_query = ""
+            self._clear_sync_feedback()
+            self.detail_error = ""
+            self.last_export_result = ""
+            self.bulk_platform_value = ""
+            self.bulk_model_value = ""
+            self.participant_scope_mode = "selected_day"
+            self.show_delete_dialog = False
+            self.show_delete_participant_dialog = False
+            self.delete_participant_event_id = ""
+            self.delete_participant_name = ""
+            self.show_bulk_delete_dialog = False
+            self.show_edit_participant = False
+            self.edit_participant_eid = ""
+            self.edit_participant_name = ""
+            self.edit_participant_email = ""
+            self.edit_participant_date = ""
+            self.edit_participant_time = ""
+            self.show_add_participant = False
+            self.editing_issue_event_id = ""
+            self.editing_issue_comment = ""
+            self.selected_ids = []
+            self.sort_field = "appointment_time"
+            self.sort_dir = "asc"
+            # Reset participant filters
+            self.filter_platform = ""
+            self.filter_status = ""
+            self.filter_date = ""
+            self.filter_has_issue = False
+            if not self.selected_date:
+                self.selected_date = datetime.now().strftime("%Y-%m-%d")
+            self.sync_start_date = self.selected_date_iso
+            self.sync_end_date = self.selected_date_iso
+            if cid:
+                await self.load_settings()
+                campaign = await get_campaign(cid)
+                if campaign:
+                    self.current_campaign = campaign
+                    fresh = await get_participants_for_campaign(cid)
+                    self._set_loaded_participants(fresh, preserve_selection=False)
+                    self.device_breakdown_open = True
+                    self.expanded_platform_panels = self._all_visible_platforms()
+                else:
+                    self.current_campaign = {}
+                    self.participants = self._decorate_participants_for_ui([])
+                    self.per_device_stats = {}
+                    self.platform_model_breakdown = {}
+                    self.expanded_platform_panels = []
+            self._mark_data_refresh_success()
+        except Exception as exc:
+            self._mark_data_refresh_error(str(exc))
+            raise
+        finally:
+            self.is_loading = False
 
     # SORTING
 
@@ -1906,32 +2351,66 @@ class NexusState(rx.State):
 
     @rx.event(background=True)
     async def sync_campaign_calendar(self):
+        attempted_at = datetime.now().isoformat()
         async with self:
             self.is_syncing = True
-            self.sync_error = ""
-            self.last_sync_result = ""
+            self._clear_sync_feedback()
             campaign = dict(self.current_campaign)
             cid = self.active_campaign_id
             date = self.selected_date_iso
         try:
             if not campaign:
                 raise ValueError("No campaign loaded")
+            if cid:
+                await db_update_campaign_sync_state(
+                    cid,
+                    attempt_at=attempted_at,
+                )
+            async with self:
+                self._set_current_campaign_sync_state(attempt_at=attempted_at)
             count = await sync_calendar_for_campaign(campaign, date)
-            # Update last_sync_at on the campaign
-            from .backend.mongo_client import update_campaign_field as _ucf
-            await _ucf(cid, "last_sync_at", datetime.now().isoformat())
+            success_at = datetime.now().isoformat()
+            if cid:
+                await db_update_campaign_sync_state(
+                    cid,
+                    attempt_at=attempted_at,
+                    success_at=success_at,
+                    error_code="",
+                    error_summary="",
+                    error_detail="",
+                )
+            fresh_campaign = await get_campaign(cid) if cid else None
             fresh = await get_participants_for_campaign(cid)
             async with self:
+                self.current_campaign = fresh_campaign or self.current_campaign
                 self._set_loaded_participants(fresh, preserve_selection=True)
-                camp = dict(self.current_campaign)
-                camp["last_sync_at"] = datetime.now().isoformat()
-                self.current_campaign = camp
+                self._set_current_campaign_sync_state(
+                    attempt_at=attempted_at,
+                    success_at=success_at,
+                )
                 self.last_sync_result = _build_sync_result_message(count, date)
+                self._mark_data_refresh_success(success_at)
                 self.is_syncing = False
         except Exception as exc:
             log.exception("Calendar sync failed")
+            error_context = _resolve_sync_error(str(exc))
+            if cid:
+                await db_update_campaign_sync_state(
+                    cid,
+                    attempt_at=attempted_at,
+                    error_code=error_context["code"],
+                    error_summary=error_context["summary"],
+                    error_detail=str(exc),
+                )
             async with self:
-                self.sync_error = str(exc)
+                self._set_current_campaign_sync_state(
+                    attempt_at=attempted_at,
+                    error_context=error_context,
+                    error_detail=str(exc),
+                )
+                self.sync_error = error_context["summary"]
+                self.sync_error_action = error_context["action"]
+                self.sync_error_detail = str(exc)
                 self.is_syncing = False
 
     # RANGE SYNC (background)
@@ -1939,51 +2418,101 @@ class NexusState(rx.State):
     def set_sync_start_date(self, v: str):
         self.sync_start_date = v
         self.range_sync_result = ""
+        self.sync_error = ""
+        self.sync_error_action = ""
+        self.sync_error_detail = ""
 
     def set_sync_end_date(self, v: str):
         self.sync_end_date = v
         self.range_sync_result = ""
+        self.sync_error = ""
+        self.sync_error_action = ""
+        self.sync_error_detail = ""
 
     @rx.event(background=True)
     async def sync_campaign_range(self):
         """Sync events for a date range instead of a single day."""
+        attempted_at = datetime.now().isoformat()
         async with self:
             self.is_syncing = True
-            self.sync_error = ""
-            self.range_sync_result = ""
+            self._clear_sync_feedback()
             campaign = dict(self.current_campaign)
             cid = self.active_campaign_id
             start = self.sync_start_date
             end = self.sync_end_date
         if not start or not end:
+            error_context = _resolve_sync_error(
+                "Select both start and end dates.",
+                error_code="missing_date_range",
+            )
             async with self:
-                self.sync_error = "Select both start and end dates."
+                self.sync_error = error_context["summary"]
+                self.sync_error_action = error_context["action"]
+                self.sync_error_detail = ""
                 self.is_syncing = False
             return
         try:
             if not campaign:
                 raise ValueError("No campaign loaded")
-            result = await sync_campaign_date_range(campaign, start, end)
-            # Update last_sync_at on the campaign
-            from .backend.mongo_client import update_campaign_field as _ucf
-            await _ucf(cid, "last_sync_at", datetime.now().isoformat())
-            fresh = await get_participants_for_campaign(cid)
+            if cid:
+                await db_update_campaign_sync_state(
+                    cid,
+                    attempt_at=attempted_at,
+                )
             async with self:
+                self._set_current_campaign_sync_state(attempt_at=attempted_at)
+            result = await sync_campaign_date_range(campaign, start, end)
+            success_at = datetime.now().isoformat()
+            if cid:
+                await db_update_campaign_sync_state(
+                    cid,
+                    attempt_at=attempted_at,
+                    success_at=success_at,
+                    error_code="",
+                    error_summary="",
+                    error_detail="",
+                )
+            fresh_campaign = await get_campaign(cid) if cid else None
+            fresh = await get_participants_for_campaign(cid)
+            start_label = start
+            end_label = end
+            if end < start:
+                start_label, end_label = end, start
+            async with self:
+                self.current_campaign = fresh_campaign or self.current_campaign
                 self._set_loaded_participants(fresh, preserve_selection=True)
-                camp = dict(self.current_campaign)
-                camp["last_sync_at"] = datetime.now().isoformat()
-                self.current_campaign = camp
+                self._set_current_campaign_sync_state(
+                    attempt_at=attempted_at,
+                    success_at=success_at,
+                )
                 self.range_sync_result = _build_range_sync_result_message(
                     result["synced"],
                     result["days"],
-                    start,
-                    end,
+                    start_label,
+                    end_label,
                 )
+                self._mark_data_refresh_success(success_at)
                 self.is_syncing = False
         except Exception as exc:
             log.exception("Range sync failed")
+            error_context = _resolve_sync_error(str(exc))
+            if cid:
+                await db_update_campaign_sync_state(
+                    cid,
+                    attempt_at=attempted_at,
+                    error_code=error_context["code"],
+                    error_summary=error_context["summary"],
+                    error_detail=str(exc),
+                )
             async with self:
-                self.sync_error = str(exc)
+                self._set_current_campaign_sync_state(
+                    attempt_at=attempted_at,
+                    error_context=error_context,
+                    error_detail=str(exc),
+                )
+                self.sync_error = error_context["summary"]
+                self.sync_error_action = error_context["action"]
+                self.sync_error_detail = str(exc)
                 self.is_syncing = False
 
     # AUTO-REFRESH (background)
@@ -2005,17 +2534,20 @@ class NexusState(rx.State):
                     date, include_archived=show_arch,
                 )
                 counts = await count_all_campaigns()
+                fresh_campaign = await get_campaign(cid) if cid else None
+                fresh = await get_participants_for_campaign(cid) if cid else []
                 async with self:
                     self.campaigns = fresh_campaigns
                     self.all_campaigns_count = counts["total"]
                     self.all_active_count = counts["active"]
                     self.all_completed_count = counts["completed"]
-                if cid:
-                    fresh = await get_participants_for_campaign(cid)
-                    async with self:
+                    if cid:
+                        self.current_campaign = fresh_campaign or {}
                         self._set_loaded_participants(fresh, preserve_selection=True)
-            except Exception:
-                pass
+                    self._mark_data_refresh_success()
+            except Exception as exc:
+                async with self:
+                    self._mark_data_refresh_error(str(exc))
 
     # PARTICIPANT MUTATIONS
 

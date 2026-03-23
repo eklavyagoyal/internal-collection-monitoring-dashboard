@@ -7,12 +7,16 @@ from .design_tokens import (
     ACCENT_GRADIENT,
     ACCENT_SOFT,
     AMBER,
+    AMBER_SOFT,
     BG,
     BORDER,
     GREEN,
+    GREEN_SOFT,
     HEADING,
     RADIUS_MD,
     RADIUS_SM,
+    RED,
+    RED_SOFT,
     SHADOW_SM,
     SUBTEXT,
     TRANSITION_FAST,
@@ -100,18 +104,91 @@ def navbar(breadcrumb: str = "") -> rx.Component:
                         title="Click to logout",
                     ),
                 ),
-                # Live indicator
+                # Refresh health
                 rx.hstack(
                     rx.box(
-                        width="6px", height="6px",
-                        border_radius="50%", bg="#22c55e",
-                        class_name="pulse-dot",
+                        width="7px",
+                        height="7px",
+                        border_radius="50%",
+                        bg=rx.cond(
+                            NexusState.app_refresh_health["state"] == "live",
+                            GREEN,
+                            rx.cond(
+                                NexusState.app_refresh_health["state"] == "syncing",
+                                ACCENT,
+                                rx.cond(
+                                    NexusState.app_refresh_health["state"] == "delayed",
+                                    AMBER,
+                                    rx.cond(
+                                        NexusState.app_refresh_health["state"] == "error",
+                                        RED,
+                                        SUBTEXT,
+                                    ),
+                                ),
+                            ),
+                        ),
+                        class_name=rx.cond(
+                            NexusState.app_refresh_health["state"] == "live",
+                            "pulse-dot",
+                            "",
+                        ),
                     ),
-                    rx.text(
-                        "Live", size="1", weight="medium",
-                        color=SUBTEXT,
+                    rx.vstack(
+                        rx.text(
+                            NexusState.app_refresh_health["label"],
+                            size="1",
+                            weight="medium",
+                            color=HEADING,
+                        ),
+                        rx.text(
+                            NexusState.app_refresh_health["detail"],
+                            size="1",
+                            color=SUBTEXT,
+                            white_space="nowrap",
+                        ),
+                        spacing="0",
+                        align="start",
                     ),
-                    spacing="2", align="center",
+                    spacing="2",
+                    align="center",
+                    padding_x="10px",
+                    padding_y="6px",
+                    border_radius=RADIUS_MD,
+                    background=rx.cond(
+                        NexusState.app_refresh_health["state"] == "live",
+                        GREEN_SOFT,
+                        rx.cond(
+                            NexusState.app_refresh_health["state"] == "syncing",
+                            ACCENT_SOFT,
+                            rx.cond(
+                                NexusState.app_refresh_health["state"] == "delayed",
+                                AMBER_SOFT,
+                                rx.cond(
+                                    NexusState.app_refresh_health["state"] == "error",
+                                    RED_SOFT,
+                                    "transparent",
+                                ),
+                            ),
+                        ),
+                    ),
+                    border=rx.cond(
+                        NexusState.app_refresh_health["state"] == "live",
+                        "1px solid rgba(34,197,94,0.16)",
+                        rx.cond(
+                            NexusState.app_refresh_health["state"] == "syncing",
+                            "1px solid rgba(99,102,241,0.16)",
+                            rx.cond(
+                                NexusState.app_refresh_health["state"] == "delayed",
+                                "1px solid rgba(245,158,11,0.16)",
+                                rx.cond(
+                                    NexusState.app_refresh_health["state"] == "error",
+                                    "1px solid rgba(239,68,68,0.16)",
+                                    BORDER,
+                                ),
+                            ),
+                        ),
+                    ),
+                    title=NexusState.app_refresh_health["title"],
                 ),
                 # New campaign shortcut
                 rx.link(

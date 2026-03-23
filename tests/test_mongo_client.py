@@ -52,6 +52,11 @@ class TestCreateCampaign:
         assert doc["goal"] == 100  # default
         assert doc["status"] == "active"
         assert doc["last_sync_at"] is None
+        assert doc["last_sync_attempt_at"] is None
+        assert doc["last_sync_success_at"] is None
+        assert doc["last_sync_error_code"] == ""
+        assert doc["last_sync_error"] == ""
+        assert doc["last_sync_error_detail"] == ""
 
     @pytest.mark.asyncio
     async def test_goal_coercion(self):
@@ -134,6 +139,23 @@ class TestGetCampaigns:
         })
         doc = await mc.get_campaign("old2")
         assert doc["goal"] == 100
+
+    @pytest.mark.asyncio
+    async def test_backfills_legacy_last_sync_into_success_and_attempt(self):
+        await mc._campaigns().insert_one({
+            "campaign_id": "old3",
+            "name": "Legacy3",
+            "status": "active",
+            "last_sync_at": "2026-03-23T10:15:00",
+        })
+
+        doc = await mc.get_campaign("old3")
+
+        assert doc["last_sync_success_at"] == "2026-03-23T10:15:00"
+        assert doc["last_sync_attempt_at"] == "2026-03-23T10:15:00"
+        assert doc["last_sync_error_code"] == ""
+        assert doc["last_sync_error"] == ""
+        assert doc["last_sync_error_detail"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -413,3 +435,53 @@ class TestSyncedDates:
 
         dates = await mc.get_synced_dates_for_campaign(cid)
         assert sorted(dates) == ["2024-06-15", "2024-06-16"]
+
+
+class TestCampaignSyncMetadata:
+    @pytest.mark.asyncio
+    async def test_update_campaign_sync_state_records_attempt_and_failure(self):
+        cid = await mc.create_campaign({"name": "SyncMeta1"})
+
+        await mc.update_campaign_sync_state(
+            cid,
+            attempt_at="2026-03-23T08:00:00",
+            error_code="missing_token",
+            error_summary="Google token is missing for this environment.",
+            error_detail="No valid token.json - cannot open browser in Docker.",
+        )
+
+        doc = await mc.get_campaign(cid)
+        assert doc["last_sync_attempt_at"] == "2026-03-23T08:00:00"
+        assert doc["last_sync_success_at"] is None
+        assert doc["last_sync_at"] is None
+        assert doc["last_sync_error_code"] == "missing_token"
+        assert doc["last_sync_error"] == "Google token is missing for this environment."
+        assert doc["last_sync_error_detail"] == "No valid token.json - cannot open browser in Docker."
+
+    @pytest.mark.asyncio
+    async def test_update_campaign_sync_state_success_clears_error_and_sets_legacy_field(self):
+        cid = await mc.create_campaign({"name": "SyncMeta2"})
+        await mc.update_campaign_sync_state(
+            cid,
+            attempt_at="2026-03-23T08:00:00",
+            error_code="missing_token",
+            error_summary="Google token is missing for this environment.",
+            error_detail="No valid token.json - cannot open browser in Docker.",
+        )
+
+        await mc.update_campaign_sync_state(
+            cid,
+            attempt_at="2026-03-23T08:15:00",
+            success_at="2026-03-23T08:16:00",
+            error_code="",
+            error_summary="",
+            error_detail="",
+        )
+
+        doc = await mc.get_campaign(cid)
+        assert doc["last_sync_attempt_at"] == "2026-03-23T08:15:00"
+        assert doc["last_sync_success_at"] == "2026-03-23T08:16:00"
+        assert doc["last_sync_at"] == "2026-03-23T08:16:00"
+        assert doc["last_sync_error_code"] == ""
+        assert doc["last_sync_error"] == ""
+        assert doc["last_sync_error_detail"] == ""
