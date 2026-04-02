@@ -199,6 +199,82 @@ class TestOperationalDayTimezone:
         assert campaigns[0]["today_completed"] == 0
 
 
+class TestDashboardSnapshot:
+    @pytest.mark.asyncio
+    async def test_dashboard_snapshot_combines_counts_and_campaign_stats(self):
+        active_cid = await mc.create_campaign({"name": "Active"})
+        completed_cid = await mc.create_campaign({"name": "Completed"})
+        await mc.update_campaign_field(completed_cid, "status", "completed")
+
+        await mc.upsert_participant(
+            active_cid, "dash-1a", "Alice", "alice@test.com", "09:00", "2026-03-23",
+        )
+        await mc.upsert_participant(
+            active_cid, "dash-1b", "Alice", "alice@test.com", "11:00", "2026-03-24",
+        )
+        await mc.update_participant_status(active_cid, "dash-1b", "Completed")
+        await mc.upsert_participant(
+            completed_cid, "dash-2a", "Bob", "bob@test.com", "10:00", "2026-03-23",
+        )
+
+        snapshot = await mc.get_dashboard_snapshot("2026-03-23")
+        campaign = snapshot["campaigns"][0]
+
+        assert snapshot["counts"] == {"total": 2, "active": 1, "completed": 1}
+        assert len(snapshot["campaigns"]) == 1
+        assert campaign["campaign_id"] == active_cid
+        assert campaign["today_total"] == 1
+        assert campaign["today_completed"] == 0
+        assert campaign["today_booked"] == 1
+        assert campaign["booked"] == 1
+        assert campaign["completed_all"] == 1
+
+    @pytest.mark.asyncio
+    async def test_dashboard_snapshot_can_include_completed_campaigns(self):
+        active_cid = await mc.create_campaign({"name": "Active"})
+        completed_cid = await mc.create_campaign({"name": "Completed"})
+        await mc.update_campaign_field(completed_cid, "status", "completed")
+
+        snapshot = await mc.get_dashboard_snapshot(
+            "2026-03-23",
+            include_archived=True,
+        )
+        ids = {campaign["campaign_id"] for campaign in snapshot["campaigns"]}
+
+        assert ids == {active_cid, completed_cid}
+
+    @pytest.mark.asyncio
+    async def test_dashboard_snapshot_progress_falls_back_for_legacy_rows(self):
+        cid = await mc.create_campaign({"name": "LegacyDash"})
+        await mc._participants().insert_many([
+            {
+                "campaign_id": cid,
+                "google_event_id": "legacy-1",
+                "name": "Legacy A",
+                "email": "legacy@test.com",
+                "appointment_date": "2026-03-23",
+                "appointment_time": "08:00",
+                "status": "Booked",
+            },
+            {
+                "campaign_id": cid,
+                "google_event_id": "legacy-2",
+                "name": "Legacy A",
+                "email": "legacy@test.com",
+                "appointment_date": "2026-03-24",
+                "appointment_time": "09:00",
+                "status": "Completed",
+            },
+        ])
+
+        snapshot = await mc.get_dashboard_snapshot("2026-03-23")
+        campaign = snapshot["campaigns"][0]
+
+        assert campaign["today_total"] == 1
+        assert campaign["booked"] == 1
+        assert campaign["completed_all"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Participant CRUD
 # ---------------------------------------------------------------------------

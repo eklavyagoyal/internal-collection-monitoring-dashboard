@@ -117,12 +117,16 @@ def navbar(breadcrumb: str = "") -> rx.Component:
                                 NexusState.app_refresh_health["state"] == "syncing",
                                 ACCENT,
                                 rx.cond(
+                                    NexusState.app_refresh_health["state"] == "refreshing",
+                                    ACCENT,
+                                    rx.cond(
                                     NexusState.app_refresh_health["state"] == "delayed",
                                     AMBER,
                                     rx.cond(
                                         NexusState.app_refresh_health["state"] == "error",
                                         RED,
                                         SUBTEXT,
+                                    ),
                                     ),
                                 ),
                             ),
@@ -161,12 +165,16 @@ def navbar(breadcrumb: str = "") -> rx.Component:
                             NexusState.app_refresh_health["state"] == "syncing",
                             ACCENT_SOFT,
                             rx.cond(
+                                NexusState.app_refresh_health["state"] == "refreshing",
+                                ACCENT_SOFT,
+                                rx.cond(
                                 NexusState.app_refresh_health["state"] == "delayed",
                                 AMBER_SOFT,
                                 rx.cond(
                                     NexusState.app_refresh_health["state"] == "error",
                                     RED_SOFT,
                                     "transparent",
+                                ),
                                 ),
                             ),
                         ),
@@ -178,12 +186,16 @@ def navbar(breadcrumb: str = "") -> rx.Component:
                             NexusState.app_refresh_health["state"] == "syncing",
                             "1px solid rgba(99,102,241,0.16)",
                             rx.cond(
+                                NexusState.app_refresh_health["state"] == "refreshing",
+                                "1px solid rgba(99,102,241,0.16)",
+                                rx.cond(
                                 NexusState.app_refresh_health["state"] == "delayed",
                                 "1px solid rgba(245,158,11,0.16)",
                                 rx.cond(
                                     NexusState.app_refresh_health["state"] == "error",
                                     "1px solid rgba(239,68,68,0.16)",
                                     BORDER,
+                                ),
                                 ),
                             ),
                         ),

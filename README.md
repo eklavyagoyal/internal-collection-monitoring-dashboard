@@ -41,7 +41,8 @@ Built with **Reflex** (Python → React + FastAPI), **MongoDB** (async via Motor
 ### Platform
 | Feature | Detail |
 |---|---|
-| **Real-Time Multi-User** | 10-second auto-refresh via MongoDB, pushed to all clients over WebSocket |
+| **Real-Time Multi-User** | Scope-aware live refresh updates only the active dashboard or campaign-detail view and pushes fresh state to all connected clients |
+| **Managed Refresh States** | Navbar and dashboard now distinguish first load, background refresh, delayed data, refresh errors, and truly empty views |
 | **Freshness Signals** | Navbar + campaign cards distinguish live refresh, stale syncs, failed attempts, and never-synced campaigns |
 | **Date Navigation** | Visible `Previous / Today / Next` day context on dashboard and campaign detail pages, anchored to a configurable operations-day timezone |
 | **Dark / Light Mode** | Toggle with a single click |
@@ -205,12 +206,19 @@ Every campaign now tracks:
 That lets the UI keep failed campaigns red until a real successful refresh clears the error, instead of silently drifting back to a reassuring green state.
 
 ### Real-Time Multi-User
-A background loop polls MongoDB every **10 seconds** and pushes fresh state to all connected clients via Reflex's WebSocket manager. **Redis** backs the state manager so every browser tab and device stays in sync instantly.
+A managed background loop refreshes only the active dashboard or campaign-detail view instead of reloading both data sets together on every tick. The dashboard snapshot now uses grouped Mongo queries for daily totals and campaign counts, so campaign grids stay responsive as volume grows. **Redis** still backs the Reflex state manager so every browser tab and device stays in sync.
 
 The navbar uses that refresh loop for a truthful live-status badge:
 - **Live data** only appears after a recent successful refresh
+- **Refreshing** appears while a background poll is actively checking for changes
 - **Refresh delayed** appears when the live view is older than expected
 - **Refresh error** appears when the last refresh attempt failed after the last known good refresh
+
+The dashboard empty states now distinguish:
+- first load in progress
+- refresh failure before any campaigns were loaded
+- filters hiding all otherwise-loaded campaigns
+- a genuinely empty workspace with no campaigns yet
 
 ### Design System
 All colours, shadows, radii, and component helpers live in `components/design_tokens.py` — `glass_card()`, `section_header()`, `form_field()`, `progress_bar()`, `status_dot()` — used consistently across every page.

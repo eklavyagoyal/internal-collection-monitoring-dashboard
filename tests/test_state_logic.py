@@ -33,7 +33,9 @@ from nexus_track.state import (
     _issue_summary_label,
     _participant_empty_state,
     _participants_for_scope,
+    _refresh_due,
     _resolve_sync_error,
+    _settings_refresh_due,
     _sanitize_form_device_configuration,
 )
 
@@ -313,6 +315,18 @@ class TestSyncErrorGuidance:
 
 
 class TestAppRefreshHealth:
+    def test_refreshing_state_is_visible_while_background_poll_runs(self):
+        health = _build_app_refresh_health(
+            "2026-03-23T11:59:45",
+            "",
+            "",
+            is_refreshing=True,
+            now=datetime(2026, 3, 23, 12, 0, 0),
+        )
+
+        assert health["state"] == "refreshing"
+        assert health["label"] == "Refreshing"
+
     def test_live_refresh_requires_recent_success(self):
         health = _build_app_refresh_health(
             "2026-03-23T11:59:45",
@@ -357,6 +371,36 @@ class TestAppRefreshHealth:
 
         assert health["state"] == "error"
         assert health["label"] == "Refresh error"
+
+
+class TestRefreshSchedulingHelpers:
+    def test_refresh_due_uses_newest_attempt_or_error_timestamp(self):
+        assert _refresh_due(
+            "2026-03-23T11:59:00",
+            "2026-03-23T11:59:10",
+            interval_seconds=15,
+            now=datetime(2026, 3, 23, 11, 59, 20),
+        ) is False
+
+        assert _refresh_due(
+            "2026-03-23T11:59:00",
+            "2026-03-23T11:59:10",
+            interval_seconds=15,
+            now=datetime(2026, 3, 23, 11, 59, 30),
+        ) is True
+
+    def test_settings_refresh_due_after_interval(self):
+        assert _settings_refresh_due(
+            "2026-03-23T11:00:00",
+            interval_seconds=60,
+            now=datetime(2026, 3, 23, 11, 0, 30),
+        ) is False
+
+        assert _settings_refresh_due(
+            "2026-03-23T11:00:00",
+            interval_seconds=60,
+            now=datetime(2026, 3, 23, 11, 1, 1),
+        ) is True
 
 
 class TestParticipantAggregationHelpers:

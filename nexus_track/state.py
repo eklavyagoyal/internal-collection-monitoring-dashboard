@@ -20,7 +20,6 @@ from pydantic import BaseModel
 from .backend.gcal_sync import list_calendars, sync_calendar_for_campaign, sync_campaign_date_range
 from .backend.mongo_client import (
     add_manual_participant,
-    count_all_campaigns,
     bulk_delete_participants as db_bulk_delete,
     bulk_update_participant_field as db_bulk_update,
     bulk_update_participant_status as db_bulk_update_status,
@@ -31,9 +30,9 @@ from .backend.mongo_client import (
     delete_participant as db_delete_participant,
     ensure_indexes,
     get_admin_pin_hash,
-    get_all_campaigns_with_stats,
     get_recent_audit_events,
     get_campaign,
+    get_dashboard_snapshot,
     get_platform_model_tag_usage,
     get_platform_usage,
     get_participants_for_campaign,
@@ -60,6 +59,10 @@ log = logging.getLogger(__name__)
 _auto_refresh_running = False
 APP_REFRESH_LIVE_SECONDS = 35
 APP_REFRESH_DELAY_SECONDS = 90
+AUTO_REFRESH_TICK_SECONDS = 3
+DASHBOARD_REFRESH_INTERVAL_SECONDS = 15
+CAMPAIGN_DETAIL_REFRESH_INTERVAL_SECONDS = 10
+SETTINGS_REFRESH_INTERVAL_SECONDS = 60
 CAMPAIGN_SYNC_STALE_MINUTES = 60
 FORM_NONE_OPTION_LABEL = "None (set manually)"
 
@@ -405,6 +408,45 @@ def _dashboard_day_metric_label(selected_date: str) -> str:
     if selected_date == operational_today_str():
         return "Today"
     return "Day"
+
+
+def _refresh_interval_for_scope(scope: str) -> int:
+    if scope == "campaign_detail":
+        return CAMPAIGN_DETAIL_REFRESH_INTERVAL_SECONDS
+    return DASHBOARD_REFRESH_INTERVAL_SECONDS
+
+
+def _refresh_due(
+    last_refresh_at: str,
+    last_error_at: str,
+    *,
+    interval_seconds: int,
+    now: datetime | None = None,
+) -> bool:
+    current = _normalize_local_datetime(now or datetime.now())
+    refresh_dt = _parse_timestamp(last_refresh_at)
+    error_dt = _parse_timestamp(last_error_at)
+
+    latest_dt: datetime | None = refresh_dt
+    if error_dt is not None and (latest_dt is None or error_dt > latest_dt):
+        latest_dt = error_dt
+    if latest_dt is None:
+        return True
+    return (current - latest_dt).total_seconds() >= interval_seconds
+
+
+def _settings_refresh_due(
+    last_settings_refresh_at: str,
+    *,
+    interval_seconds: int = SETTINGS_REFRESH_INTERVAL_SECONDS,
+    now: datetime | None = None,
+) -> bool:
+    return _refresh_due(
+        last_settings_refresh_at,
+        "",
+        interval_seconds=interval_seconds,
+        now=now,
+    )
 
 
 def _build_sync_result_message(count: int, selected_date: str) -> str:
@@ -869,6 +911,7 @@ def _build_app_refresh_health(
     last_error: str,
     *,
     is_loading: bool = False,
+    is_refreshing: bool = False,
     is_syncing: bool = False,
     now: datetime | None = None,
 ) -> dict[str, str]:
@@ -888,6 +931,10 @@ def _build_app_refresh_health(
         label = "Loading"
         detail = "Waiting for the first data load."
         state = "loading"
+    elif is_refreshing:
+        label = "Refreshing"
+        detail = "Checking for dashboard changes."
+        state = "refreshing"
     elif refresh_dt is None:
         label = "Refresh error" if error_active else "Connecting"
         detail = (
@@ -1008,9 +1055,11 @@ class NexusState(rx.State):
 
     # LOADING STATE
     is_loading: bool = False
+    is_refreshing: bool = False
     last_data_refresh_at: str = ""
     last_data_refresh_error_at: str = ""
     last_data_refresh_error: str = ""
+    last_settings_refresh_at: str = ""
 
     # DASHBOARD
     campaigns: list[dict] = []
@@ -1028,6 +1077,7 @@ class NexusState(rx.State):
     # CAMPAIGN DETAIL
     current_campaign: dict = {}
     active_campaign_id: str = ""
+    live_refresh_scope: str = ""
     participants: list[dict] = []
     search_query: str = ""
     per_device_stats: dict = {}
@@ -1763,6 +1813,7 @@ class NexusState(rx.State):
             self.last_data_refresh_error_at,
             self.last_data_refresh_error,
             is_loading=self.is_loading,
+            is_refreshing=self.is_refreshing,
             is_syncing=self.is_syncing,
         )
 
@@ -1879,13 +1930,17 @@ class NexusState(rx.State):
         return self.form_default_model_tag or FORM_NONE_OPTION_LABEL
 
     async def prepare_new_campaign_form(self):
-        await self.load_settings()
+        self._set_live_refresh_scope("")
+        self.active_campaign_id = ""
+        await self._refresh_settings_if_due(force=True)
         self.clear_form()
 
     async def prepare_settings_page(self):
+        self._set_live_refresh_scope("")
+        self.active_campaign_id = ""
         self.settings_feedback = ""
         self.settings_feedback_tone = "info"
-        await self.load_settings()
+        await self._refresh_settings_if_due(force=True)
         await self.load_recent_admin_actions()
 
     async def load_settings(self):
@@ -1908,6 +1963,7 @@ class NexusState(rx.State):
         if self.bulk_platform_value and self.bulk_platform_value not in self.platforms:
             self.bulk_platform_value = ""
         self._sync_form_device_configuration()
+        self.last_settings_refresh_at = _utc_now_iso()
 
     async def load_recent_admin_actions(self):
         rows = await get_recent_audit_events(limit=8)
@@ -2150,6 +2206,20 @@ class NexusState(rx.State):
     def _mark_data_refresh_error(self, message: str) -> None:
         self.last_data_refresh_error = str(message or "").strip() or "Live refresh failed."
         self.last_data_refresh_error_at = _utc_now_iso()
+
+    def _set_live_refresh_scope(self, scope: str) -> None:
+        self.live_refresh_scope = scope
+
+    async def _refresh_settings_if_due(self, *, force: bool = False) -> None:
+        if force or _settings_refresh_due(self.last_settings_refresh_at):
+            await self.load_settings()
+
+    def _apply_dashboard_snapshot(self, snapshot: dict) -> None:
+        counts = _to_plain_python(snapshot.get("counts", {})) or {}
+        self.campaigns = _to_plain_python(snapshot.get("campaigns", [])) or []
+        self.all_campaigns_count = int(counts.get("total", 0) or 0)
+        self.all_active_count = int(counts.get("active", 0) or 0)
+        self.all_completed_count = int(counts.get("completed", 0) or 0)
 
     def _set_current_campaign_sync_state(
         self,
@@ -2605,18 +2675,19 @@ class NexusState(rx.State):
     # DASHBOARD
 
     async def load_campaigns(self):
+        self._set_live_refresh_scope("dashboard")
+        self.active_campaign_id = ""
         self.is_loading = True
+        self.is_refreshing = False
         try:
             await ensure_indexes()
-            await self.load_settings()
+            await self._refresh_settings_if_due(force=not bool(self.platforms))
             date = self._get_date()
-            self.campaigns = await get_all_campaigns_with_stats(
-                date, include_archived=self.show_archived,
+            snapshot = await get_dashboard_snapshot(
+                date=date,
+                include_archived=self.show_archived,
             )
-            counts = await count_all_campaigns()
-            self.all_campaigns_count = counts["total"]
-            self.all_active_count = counts["active"]
-            self.all_completed_count = counts["completed"]
+            self._apply_dashboard_snapshot(snapshot)
             self._mark_data_refresh_success()
         except Exception as exc:
             self._mark_data_refresh_error(str(exc))
@@ -2634,7 +2705,9 @@ class NexusState(rx.State):
     # CAMPAIGN DETAIL
 
     async def load_campaign_detail(self):
+        self._set_live_refresh_scope("campaign_detail")
         self.is_loading = True
+        self.is_refreshing = False
         try:
             cid = self.router.page.params.get("campaign_id", "")
             self.active_campaign_id = cid
@@ -2672,7 +2745,8 @@ class NexusState(rx.State):
             self.sync_start_date = self.selected_date_iso
             self.sync_end_date = self.selected_date_iso
             if cid:
-                await self.load_settings()
+                await ensure_indexes()
+                await self._refresh_settings_if_due(force=not bool(self.platforms))
                 campaign = await get_campaign(cid)
                 if campaign:
                     self.current_campaign = campaign
@@ -3012,30 +3086,73 @@ class NexusState(rx.State):
             return
         _auto_refresh_running = True
         while True:
-            await asyncio.sleep(10)
+            await asyncio.sleep(AUTO_REFRESH_TICK_SECONDS)
             try:
                 async with self:
+                    scope = self.live_refresh_scope
+                    is_loading = self.is_loading
+                    is_syncing = self.is_syncing
+                    is_refreshing = self.is_refreshing
+                    last_refresh_at = self.last_data_refresh_at
+                    last_error_at = self.last_data_refresh_error_at
                     date = self.selected_date or operational_today_str()
                     cid = self.active_campaign_id
                     show_arch = self.show_archived
-                fresh_campaigns = await get_all_campaigns_with_stats(
-                    date, include_archived=show_arch,
-                )
-                counts = await count_all_campaigns()
-                fresh_campaign = await get_campaign(cid) if cid else None
-                fresh = await get_participants_for_campaign(cid) if cid else []
-                async with self:
-                    self.campaigns = fresh_campaigns
-                    self.all_campaigns_count = counts["total"]
-                    self.all_active_count = counts["active"]
-                    self.all_completed_count = counts["completed"]
-                    if cid:
+                if not scope or is_loading or is_syncing or is_refreshing:
+                    continue
+
+                if not _refresh_due(
+                    last_refresh_at,
+                    last_error_at,
+                    interval_seconds=_refresh_interval_for_scope(scope),
+                ):
+                    continue
+
+                if scope == "dashboard":
+                    async with self:
+                        if self.live_refresh_scope != scope or self.is_loading or self.is_syncing:
+                            continue
+                        self.is_refreshing = True
+                    snapshot = await get_dashboard_snapshot(
+                        date=date,
+                        include_archived=show_arch,
+                    )
+                    async with self:
+                        if (
+                            self.live_refresh_scope != "dashboard"
+                            or self.selected_date_iso != date
+                            or self.show_archived != show_arch
+                        ):
+                            self.is_refreshing = False
+                            continue
+                        self._apply_dashboard_snapshot(snapshot)
+                        self._mark_data_refresh_success()
+                        self.is_refreshing = False
+                    continue
+
+                if scope == "campaign_detail" and cid:
+                    async with self:
+                        if self.live_refresh_scope != scope or self.is_loading or self.is_syncing:
+                            continue
+                        self.is_refreshing = True
+                    fresh_campaign = await get_campaign(cid)
+                    fresh = await get_participants_for_campaign(cid)
+                    async with self:
+                        if (
+                            self.live_refresh_scope != "campaign_detail"
+                            or self.active_campaign_id != cid
+                        ):
+                            self.is_refreshing = False
+                            continue
                         self.current_campaign = fresh_campaign or {}
                         self._set_loaded_participants(fresh, preserve_selection=True)
-                    self._mark_data_refresh_success()
+                        self._mark_data_refresh_success()
+                        self.is_refreshing = False
             except Exception as exc:
+                log.exception("Live refresh failed")
                 async with self:
                     self._mark_data_refresh_error(str(exc))
+                    self.is_refreshing = False
 
     # PARTICIPANT MUTATIONS
 
@@ -3683,10 +3800,12 @@ class NexusState(rx.State):
         self.form_default_model_tag = ""
 
     async def load_edit_campaign(self):
+        self._set_live_refresh_scope("")
+        self.active_campaign_id = ""
         cid = self.router.page.params.get("campaign_id", "")
         if not cid:
             return
-        await self.load_settings()
+        await self._refresh_settings_if_due(force=True)
         campaign = await get_campaign(cid)
         if not campaign:
             return rx.redirect("/")

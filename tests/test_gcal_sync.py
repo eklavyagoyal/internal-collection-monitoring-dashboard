@@ -1,5 +1,8 @@
 """Pure helper tests for timezone-safe Google Calendar normalization."""
 
+import pytest
+
+from nexus_track.backend import gcal_sync
 from nexus_track.backend.gcal_sync import (
     _calendar_day_bounds,
     _normalize_google_event_start,
@@ -62,4 +65,39 @@ class TestGoogleEventStartNormalization:
             "appointment_start_utc": "",
             "appointment_timezone": "Europe/Berlin",
             "appointment_has_time": False,
+        }
+
+
+class TestCampaignSync:
+    @pytest.mark.asyncio
+    async def test_sync_calendar_for_campaign_uses_requested_date(self, monkeypatch):
+        seen: dict[str, str | None] = {}
+
+        async def fake_ensure_indexes():
+            return None
+
+        def fake_fetch_events_for_date(calendar_id: str = "primary", date_str: str | None = None):
+            seen["calendar_id"] = calendar_id
+            seen["date_str"] = date_str
+            return []
+
+        async def fake_upsert_participant(**kwargs):
+            raise AssertionError("upsert_participant should not be called when there are no events")
+
+        monkeypatch.setattr(gcal_sync, "ensure_indexes", fake_ensure_indexes)
+        monkeypatch.setattr(gcal_sync, "_fetch_events_for_date", fake_fetch_events_for_date)
+        monkeypatch.setattr(gcal_sync, "upsert_participant", fake_upsert_participant)
+
+        synced = await gcal_sync.sync_calendar_for_campaign(
+            {
+                "campaign_id": "camp-123",
+                "calendar_id": "team-calendar@group.calendar.google.com",
+            },
+            "2026-04-02",
+        )
+
+        assert synced == 0
+        assert seen == {
+            "calendar_id": "team-calendar@group.calendar.google.com",
+            "date_str": "2026-04-02",
         }

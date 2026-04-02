@@ -253,6 +253,117 @@ def _empty_state() -> rx.Component:
     )
 
 
+def _loading_state() -> rx.Component:
+    return rx.center(
+        rx.vstack(
+            rx.spinner(size="3"),
+            rx.text(
+                "Loading campaigns",
+                size="4",
+                weight="medium",
+                color=HEADING,
+            ),
+            rx.text(
+                "Waiting for the first dashboard snapshot.",
+                size="2",
+                color=SUBTEXT,
+                text_align="center",
+                max_width="320px",
+            ),
+            align="center",
+            spacing="3",
+            padding="80px 24px",
+        ),
+    )
+
+
+def _refresh_error_state() -> rx.Component:
+    return rx.center(
+        rx.vstack(
+            rx.center(
+                rx.icon(
+                    "triangle-alert",
+                    size=42,
+                    stroke_width=1.2,
+                    color=RED,
+                ),
+                width="88px",
+                height="88px",
+                border_radius="50%",
+                background=RED_SOFT,
+            ),
+            rx.text(
+                "Couldn't load campaigns",
+                size="4",
+                weight="medium",
+                color=HEADING,
+            ),
+            rx.text(
+                NexusState.app_refresh_health["detail"],
+                size="2",
+                color=SUBTEXT,
+                text_align="center",
+                max_width="360px",
+            ),
+            rx.text(
+                NexusState.last_data_refresh_error,
+                size="1",
+                color=RED,
+                text_align="center",
+                max_width="420px",
+                line_height="1.5",
+            ),
+            align="center",
+            spacing="3",
+            padding="80px 24px",
+        ),
+    )
+
+
+def _filtered_empty_state() -> rx.Component:
+    return rx.center(
+        rx.vstack(
+            rx.center(
+                rx.icon(
+                    "search-x",
+                    size=42,
+                    stroke_width=1.2,
+                    color=MUTED,
+                ),
+                width="88px",
+                height="88px",
+                border_radius="50%",
+                background=ACCENT_SOFT,
+            ),
+            rx.text(
+                "No campaigns match this view",
+                size="4",
+                weight="medium",
+                color=HEADING,
+            ),
+            rx.text(
+                rx.cond(
+                    (NexusState.campaign_search_query != "")
+                    & (NexusState.campaign_device_filter != ""),
+                    "Adjust the search and platform filter to bring campaigns back into view.",
+                    rx.cond(
+                        NexusState.campaign_search_query != "",
+                        "Adjust the search query to bring campaigns back into view.",
+                        "Adjust the platform filter to bring campaigns back into view.",
+                    ),
+                ),
+                size="2",
+                color=SUBTEXT,
+                text_align="center",
+                max_width="360px",
+            ),
+            align="center",
+            spacing="3",
+            padding="80px 24px",
+        ),
+    )
+
+
 # -- Page
 def dashboard_page() -> rx.Component:
     return rx.box(
@@ -367,7 +478,20 @@ def dashboard_page() -> rx.Component:
                     spacing="4",
                     width="100%",
                 ),
-                _empty_state(),
+                rx.cond(
+                    NexusState.is_loading & (NexusState.campaigns.length() == 0),
+                    _loading_state(),
+                    rx.cond(
+                        (NexusState.campaigns.length() == 0)
+                        & (NexusState.last_data_refresh_error != ""),
+                        _refresh_error_state(),
+                        rx.cond(
+                            NexusState.campaigns.length() > 0,
+                            _filtered_empty_state(),
+                            _empty_state(),
+                        ),
+                    ),
+                ),
             ),
             # -- Container
             max_width=MAX_WIDTH,

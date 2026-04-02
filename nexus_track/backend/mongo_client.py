@@ -22,6 +22,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 # ---------------------------------------------------------------------------
 
 _client: AsyncIOMotorClient | None = None
+_indexes_client_id: int | None = None
 
 # Default label sets shipped with a fresh install.
 DEFAULT_PLATFORMS = ["Orb", "Kiosk-v1", "Kiosk-v2", "Self-Serve", "Other"]
@@ -232,6 +233,11 @@ def _audit_log():
 # ---------------------------------------------------------------------------
 
 async def ensure_indexes() -> None:
+    global _indexes_client_id
+    client_id = id(_get_client())
+    if _indexes_client_id == client_id:
+        return
+
     try:
         await _participants().drop_index("google_event_id_1")
     except Exception:
@@ -267,6 +273,7 @@ async def ensure_indexes() -> None:
         {"status": "archived"},
         {"$set": {"status": "completed"}},
     )
+    _indexes_client_id = client_id
 
 
 # =========================================================================
@@ -565,11 +572,29 @@ async def get_all_campaigns() -> list[dict]:
 
 async def count_all_campaigns() -> dict:
     """Return total, active, and completed campaign counts (includes archived)."""
-    all_camps = await get_all_campaigns()
-    total = len(all_camps)
-    active = sum(1 for c in all_camps if c.get("status") == "active")
-    completed = sum(1 for c in all_camps if c.get("status") == "completed")
-    return {"total": total, "active": active, "completed": completed}
+    cursor = _campaigns().aggregate([
+        {
+            "$group": {
+                "_id": None,
+                "total": {"$sum": 1},
+                "active": {
+                    "$sum": {"$cond": [{"$eq": ["$status", "active"]}, 1, 0]},
+                },
+                "completed": {
+                    "$sum": {"$cond": [{"$eq": ["$status", "completed"]}, 1, 0]},
+                },
+            },
+        },
+    ])
+    rows = await cursor.to_list(length=1)
+    if not rows:
+        return {"total": 0, "active": 0, "completed": 0}
+    row = rows[0]
+    return {
+        "total": int(row.get("total", 0) or 0),
+        "active": int(row.get("active", 0) or 0),
+        "completed": int(row.get("completed", 0) or 0),
+    }
 
 
 async def get_campaign(campaign_id: str) -> dict | None:
@@ -676,6 +701,124 @@ async def get_campaign_progress(campaign_id: str) -> dict:
     }
 
 
+async def _aggregate_daily_campaign_stats(
+    campaign_ids: list[str],
+    date: str,
+) -> dict[str, dict[str, int]]:
+    if not campaign_ids:
+        return {}
+
+    cursor = _participants().aggregate([
+        {
+            "$match": {
+                "campaign_id": {"$in": campaign_ids},
+                "appointment_date": date,
+            },
+        },
+        {
+            "$group": {
+                "_id": "$campaign_id",
+                "today_total": {"$sum": 1},
+                "today_completed": {
+                    "$sum": {"$cond": [{"$eq": ["$status", "Completed"]}, 1, 0]},
+                },
+            },
+        },
+    ])
+
+    stats: dict[str, dict[str, int]] = {}
+    async for row in cursor:
+        total = int(row.get("today_total", 0) or 0)
+        completed = int(row.get("today_completed", 0) or 0)
+        stats[str(row.get("_id", "") or "")] = {
+            "today_total": total,
+            "today_completed": completed,
+            "today_booked": max(0, total - completed),
+            "today_progress": int(completed / total * 100) if total else 0,
+        }
+    return stats
+
+
+async def _aggregate_campaign_progress_stats(
+    campaign_ids: list[str],
+) -> dict[str, dict[str, int]]:
+    if not campaign_ids:
+        return {}
+
+    cursor = _participants().find(
+        {"campaign_id": {"$in": campaign_ids}},
+        {
+            "campaign_id": 1,
+            "progress_key": 1,
+            "email": 1,
+            "google_event_id": 1,
+            "status": 1,
+        },
+    )
+
+    seen_by_campaign: dict[str, dict[str, bool]] = {}
+    async for row in cursor:
+        campaign_id = str(row.get("campaign_id", "") or "")
+        progress_key = str(row.get("progress_key", "") or "").strip() or build_progress_key(
+            row.get("email", ""),
+            row.get("google_event_id", ""),
+        )
+        campaign_seen = seen_by_campaign.setdefault(campaign_id, {})
+        campaign_seen.setdefault(progress_key, False)
+        if row.get("status") == "Completed":
+            campaign_seen[progress_key] = True
+
+    return {
+        campaign_id: {
+            "booked": len(progress_rows),
+            "completed": sum(1 for completed in progress_rows.values() if completed),
+        }
+        for campaign_id, progress_rows in seen_by_campaign.items()
+    }
+
+
+async def get_dashboard_snapshot(
+    date: str | None = None,
+    include_archived: bool = False,
+) -> dict[str, Any]:
+    """Return the dashboard's campaign rows plus global campaign counts."""
+    if date is None:
+        date = operational_today_str()
+
+    campaign_query: dict[str, Any] = {}
+    if not include_archived:
+        campaign_query["status"] = {"$ne": "completed"}
+
+    cursor = _campaigns().find(campaign_query).sort("created_at", -1)
+    campaigns: list[dict[str, Any]] = []
+    async for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        _backfill_campaign(doc)
+        campaigns.append(doc)
+
+    campaign_ids = [str(campaign.get("campaign_id", "") or "") for campaign in campaigns]
+    daily_stats = await _aggregate_daily_campaign_stats(campaign_ids, date)
+    progress_stats = await _aggregate_campaign_progress_stats(campaign_ids)
+    counts = await count_all_campaigns()
+
+    for campaign in campaigns:
+        campaign_id = str(campaign.get("campaign_id", "") or "")
+        today = daily_stats.get(campaign_id, {})
+        progress = progress_stats.get(campaign_id, {})
+        campaign["today_total"] = int(today.get("today_total", 0) or 0)
+        campaign["today_completed"] = int(today.get("today_completed", 0) or 0)
+        campaign["today_booked"] = int(today.get("today_booked", 0) or 0)
+        campaign["today_progress"] = int(today.get("today_progress", 0) or 0)
+        campaign["booked"] = int(progress.get("booked", 0) or 0)
+        campaign["completed_all"] = int(progress.get("completed", 0) or 0)
+
+    return {
+        "campaigns": campaigns,
+        "counts": counts,
+        "date": date,
+    }
+
+
 async def get_all_campaigns_with_stats(
     date: str | None = None,
     include_archived: bool = False,
@@ -687,28 +830,11 @@ async def get_all_campaigns_with_stats(
     is omitted, the dashboard uses the configured operations-day timezone
     instead of inheriting the host machine's local timezone.
     """
-    campaigns = await get_all_campaigns()
-    if not include_archived:
-        campaigns = [c for c in campaigns if c.get("status") != "completed"]
-    if date is None:
-        date = operational_today_str()
-    for c in campaigns:
-        cid = c["campaign_id"]
-
-        # Per-date stats (for the daily view)
-        parts = await get_participants_for_campaign(cid, date)
-        total = len(parts)
-        completed = sum(1 for p in parts if p.get("status") == "Completed")
-        c["today_total"] = total
-        c["today_completed"] = completed
-        c["today_booked"] = total - completed
-        c["today_progress"] = int(completed / total * 100) if total else 0
-
-        # Overall progress across all dates
-        progress = await get_campaign_progress(cid)
-        c["booked"] = progress["booked"]
-        c["completed_all"] = progress["completed"]
-    return campaigns
+    snapshot = await get_dashboard_snapshot(
+        date=date,
+        include_archived=include_archived,
+    )
+    return list(snapshot["campaigns"])
 
 
 # =========================================================================

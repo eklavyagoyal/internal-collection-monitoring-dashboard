@@ -303,7 +303,7 @@ async def sync_calendar_for_campaign(
     total_synced = 0
     for cal_id, keyword in cal_configs:
         events = await asyncio.to_thread(
-            _fetch_events_for_date, cal_id, target_date,
+            _fetch_events_for_date, cal_id, date_str,
         )
 
         if keyword:
