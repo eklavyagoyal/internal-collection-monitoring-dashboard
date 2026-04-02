@@ -17,19 +17,19 @@ BG_SUBTLE = rx.color_mode_cond(light="#f1f5f9", dark="#111827")
 
 # ── Card / surface backgrounds ────────────────────────────────────────────
 CARD_BG = rx.color_mode_cond(
-    light="rgba(255,255,255,0.78)", dark="rgba(22,27,45,0.72)",
+    light="rgba(255,255,255,0.96)", dark="rgba(15,23,42,0.96)",
 )
-CARD_BG_SOLID = rx.color_mode_cond(light="white", dark="#161b2d")
+CARD_BG_SOLID = rx.color_mode_cond(light="white", dark="#111827")
 CARD_BG_HOVER = rx.color_mode_cond(
-    light="rgba(255,255,255,0.95)", dark="rgba(30,35,55,0.85)",
+    light="rgba(255,255,255,0.99)", dark="rgba(17,24,39,0.99)",
 )
 
 # ── Borders ───────────────────────────────────────────────────────────────
 BORDER = rx.color_mode_cond(
-    light="1px solid rgba(0,0,0,0.06)", dark="1px solid rgba(255,255,255,0.06)",
+    light="1px solid rgba(15,23,42,0.08)", dark="1px solid rgba(255,255,255,0.08)",
 )
 BORDER_SUBTLE = rx.color_mode_cond(
-    light="1px solid rgba(0,0,0,0.03)", dark="1px solid rgba(255,255,255,0.03)",
+    light="1px solid rgba(15,23,42,0.05)", dark="1px solid rgba(255,255,255,0.04)",
 )
 BORDER_ACCENT = rx.color_mode_cond(
     light="1px solid rgba(99,102,241,0.2)", dark="1px solid rgba(139,92,246,0.25)",
@@ -78,17 +78,17 @@ VIOLET_SOFT = rx.color_mode_cond(
 # ═══════════════════════════════════════════════════════════════════════════
 
 SHADOW_SM = rx.color_mode_cond(
-    light="0 1px 3px rgba(0,0,0,0.04)", dark="0 1px 3px rgba(0,0,0,0.2)",
+    light="0 1px 2px rgba(15,23,42,0.05)", dark="0 1px 2px rgba(0,0,0,0.16)",
 )
 SHADOW_MD = rx.color_mode_cond(
-    light="0 4px 16px rgba(0,0,0,0.06)", dark="0 4px 16px rgba(0,0,0,0.3)",
+    light="0 8px 20px rgba(15,23,42,0.06)", dark="0 10px 24px rgba(0,0,0,0.2)",
 )
 SHADOW_LG = rx.color_mode_cond(
-    light="0 12px 36px rgba(0,0,0,0.08)", dark="0 12px 36px rgba(0,0,0,0.4)",
+    light="0 14px 32px rgba(15,23,42,0.08)", dark="0 16px 36px rgba(0,0,0,0.24)",
 )
 SHADOW_ACCENT = rx.color_mode_cond(
-    light="0 4px 20px rgba(99,102,241,0.12)",
-    dark="0 4px 20px rgba(99,102,241,0.2)",
+    light="0 4px 16px rgba(99,102,241,0.08)",
+    dark="0 4px 16px rgba(99,102,241,0.14)",
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -120,12 +120,12 @@ TRANSITION_FAST = "all 0.12s ease"
 # ═══════════════════════════════════════════════════════════════════════════
 
 HOVER_LIFT = {
-    "transform": "translateY(-3px)",
-    "box_shadow": SHADOW_LG,
+    "transform": "translateY(-1px)",
+    "box_shadow": SHADOW_MD,
 }
 
 HOVER_GLOW = {
-    "box_shadow": SHADOW_ACCENT,
+    "box_shadow": SHADOW_MD,
 }
 
 HOVER_SUBTLE = {
@@ -140,13 +140,13 @@ HOVER_SUBTLE = {
 
 
 def glass_card(*children, **overrides) -> rx.Component:
-    """Frosted-glass card — pass children + any prop overrides."""
+    """Shared surface card for operational pages."""
     props = dict(
-        padding="24px",
+        padding="18px",
         border_radius=RADIUS_LG,
         background=CARD_BG,
         border=BORDER,
-        backdrop_filter="blur(16px) saturate(180%)",
+        backdrop_filter="blur(4px) saturate(110%)",
         box_shadow=SHADOW_SM,
         transition=TRANSITION,
     )
@@ -232,12 +232,17 @@ _GHOST_BTN_HOVER = {
 }
 
 
-def ghost_icon_btn(icon_name: str, size: int = 14, **props) -> rx.Component:
+def ghost_icon_btn(
+    icon_name: str,
+    icon_size: int = 15,
+    button_size: str = "2",
+    **props,
+) -> rx.Component:
     """Consistent ghost icon button."""
     return rx.icon_button(
-        rx.icon(icon_name, size=size),
+        rx.icon(icon_name, size=icon_size),
         variant="ghost",
-        size="1",
+        size=button_size,
         cursor="pointer",
         color=_GHOST_BTN_COLOR,
         _hover=_GHOST_BTN_HOVER,
@@ -373,7 +378,7 @@ def milestone_badges(
 
 
 def status_dot(status, size: str = "8px") -> rx.Component:
-    """Tiny coloured dot with glow for active states."""
+    """Tiny coloured dot for status states."""
     return rx.box(
         width=size,
         height=size,
@@ -384,12 +389,6 @@ def status_dot(status, size: str = "8px") -> rx.Component:
             ("Completed", GREEN),
             ("Booked", AMBER),
             "#cbd5e1",
-        ),
-        box_shadow=rx.match(
-            status,
-            ("Completed", f"0 0 6px rgba(34,197,94,0.35)"),
-            ("Booked", f"0 0 6px rgba(245,158,11,0.35)"),
-            "none",
         ),
     )
 
@@ -403,10 +402,9 @@ def campaign_status_indicator(status) -> rx.Component:
             rx.hstack(
                 rx.box(
                     width="6px", height="6px",
-                    border_radius="50%", bg=GREEN,
-                    box_shadow=f"0 0 6px rgba(34,197,94,0.35)",
+                    border_radius="50%", bg=ACCENT,
                 ),
-                rx.text("Active", size="1", weight="medium", color=GREEN),
+                rx.text("Active", size="1", weight="medium", color=ACCENT),
                 spacing="2", align="center",
             ),
         ),
@@ -426,9 +424,9 @@ def campaign_status_indicator(status) -> rx.Component:
             rx.hstack(
                 rx.box(
                     width="6px", height="6px",
-                    border_radius="50%", bg="#8b5cf6",
+                    border_radius="50%", bg=GREEN,
                 ),
-                rx.text("Completed", size="1", weight="medium", color="#8b5cf6"),
+                rx.text("Completed", size="1", weight="medium", color=GREEN),
                 spacing="2", align="center",
             ),
         ),

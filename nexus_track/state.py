@@ -336,23 +336,23 @@ def _participant_empty_state(
         if total_issues == 0:
             return (
                 "No flagged issues yet",
-                "Flag an issue on any participant row to track exceptions here.",
+                "Flag a participant when something needs follow-up.",
             )
         return (
-            "No issues match the current view",
-            "Clear search or other filters to bring flagged participants back into view.",
+            "No issues in this view",
+            "Clear filters to bring flagged participants back into view.",
         )
     if total_participants > 0 and participant_scope_mode == "selected_day":
         return (
-            "No participants on the selected day",
-            "Choose another day or switch to All dates to widen the participant view.",
+            "No participants on this day",
+            "Choose another day or switch to All dates.",
         )
     if total_participants > 0:
         return (
-            "No participants match the current view",
-            "Adjust search or filters to bring participants back into view.",
+            "No participants in this view",
+            "Adjust search or filters to bring them back.",
         )
-    return "No participants yet", "Sync a calendar or add participants manually."
+    return "No participants yet", "Sync a calendar or add someone manually."
 
 
 def _participants_for_scope(
@@ -408,6 +408,75 @@ def _dashboard_day_metric_label(selected_date: str) -> str:
     if selected_date == operational_today_str():
         return "Today"
     return "Day"
+
+
+def _build_dashboard_metric_summary(
+    total_campaigns: int,
+    active_campaigns: int,
+    completed_campaigns: int,
+) -> str:
+    return (
+        f"{total_campaigns} total"
+        + " · "
+        + f"{active_campaigns} active"
+        + " · "
+        + f"{completed_campaigns} completed"
+    )
+
+
+def _build_workspace_filter_summary(
+    *,
+    search_query: str,
+    filter_platform: str,
+    filter_status: str,
+    filter_date: str,
+    filter_has_issue: bool,
+) -> str:
+    active: list[str] = []
+    if str(search_query or "").strip():
+        active.append("Search")
+    if str(filter_status or "").strip():
+        active.append(str(filter_status).strip())
+    if str(filter_platform or "").strip():
+        active.append(str(filter_platform).strip())
+    if str(filter_date or "").strip():
+        active.append(_compact_date_label(str(filter_date).strip()))
+    if filter_has_issue:
+        active.append("Issues")
+    if not active:
+        return "No filters"
+    if len(active) == 1:
+        return active[0]
+    if len(active) == 2:
+        return active[0] + " + " + active[1]
+    return f"{len(active)} filters active"
+
+
+def _add_compact_sync_copy(sync: dict[str, object]) -> dict[str, object]:
+    state = str(sync.get("sync_health_state", "") or "").strip()
+    if state == "fresh":
+        sync["sync_compact_label"] = "Fresh"
+        sync["sync_compact_detail"] = str(sync.get("sync_last_success_display", "Never"))
+        return sync
+    if state == "stale":
+        sync["sync_compact_label"] = "Needs refresh"
+        sync["sync_compact_detail"] = str(sync.get("sync_last_success_display", "Never"))
+        return sync
+    if state == "failed":
+        sync["sync_compact_label"] = "Failed"
+        sync["sync_compact_detail"] = str(
+            sync.get("sync_last_attempt_display")
+            or sync.get("sync_error_summary")
+            or "Retry required"
+        )
+        return sync
+    if state == "never":
+        sync["sync_compact_label"] = "First sync"
+        sync["sync_compact_detail"] = "No successful sync yet"
+        return sync
+    sync["sync_compact_label"] = "Sync status"
+    sync["sync_compact_detail"] = str(sync.get("sync_last_success_display", "Never"))
+    return sync
 
 
 def _refresh_interval_for_scope(scope: str) -> int:
@@ -901,7 +970,7 @@ def _decorate_campaign_with_sync_health(
     now: datetime | None = None,
 ) -> dict:
     row = dict(_to_plain_python(campaign) or {})
-    row.update(_build_campaign_sync_health(row, now=now))
+    row.update(_add_compact_sync_copy(_build_campaign_sync_health(row, now=now)))
     return row
 
 
@@ -925,37 +994,37 @@ def _build_app_refresh_health(
 
     if is_syncing:
         label = "Syncing"
-        detail = "Applying calendar changes."
+        detail = "Applying changes."
         state = "syncing"
     elif is_loading and refresh_dt is None:
         label = "Loading"
-        detail = "Waiting for the first data load."
+        detail = "Waiting for first data load."
         state = "loading"
     elif is_refreshing:
         label = "Refreshing"
-        detail = "Checking for dashboard changes."
+        detail = "Checking for updates."
         state = "refreshing"
     elif refresh_dt is None:
-        label = "Refresh error" if error_active else "Connecting"
+        label = "Refresh issue" if error_active else "Connecting"
         detail = (
-            "Live refresh has not loaded data yet."
+            "No dashboard data has loaded yet."
             if error_active
-            else "Waiting for the first live refresh."
+            else "Waiting for first refresh."
         )
         state = "error" if error_active else "loading"
     else:
         age_seconds = max(0, int((current - refresh_dt).total_seconds()))
         age_label = _relative_time_label(refresh_dt, now=current)
         if error_active:
-            label = "Refresh error"
+            label = "Refresh issue"
             detail = "Last good refresh " + age_label + "."
             state = "error"
         elif age_seconds <= APP_REFRESH_LIVE_SECONDS:
-            label = "Live data"
+            label = "Live"
             detail = "Updated " + age_label + "."
             state = "live"
         else:
-            label = "Refresh delayed"
+            label = "Delayed"
             detail = "Last refresh " + age_label + "."
             state = "delayed"
 
@@ -1094,6 +1163,9 @@ class NexusState(rx.State):
     # SECTION COLLAPSE
     bookings_collapsed: bool = False
     completed_collapsed: bool = True
+    analytics_collapsed: bool = True
+    advanced_actions_collapsed: bool = True
+    export_details_collapsed: bool = True
 
     # PARTICIPANT FILTERS
     filter_platform: str = ""
@@ -1403,12 +1475,28 @@ class NexusState(rx.State):
         return _dashboard_day_metric_label(self.selected_date_iso)
 
     @rx.var(cache=True)
-    def dashboard_date_context_note(self) -> str:
-        return (
-            "Daily counts on campaign cards use "
-            + self.display_date_label
-            + ". Goal progress still stays all dates."
+    def dashboard_metric_summary(self) -> str:
+        return _build_dashboard_metric_summary(
+            self.all_campaigns_count,
+            self.all_active_count,
+            self.all_completed_count,
         )
+
+    @rx.var(cache=True)
+    def dashboard_date_context_note(self) -> str:
+        return "Cards use " + self.display_date_label + " for day counts."
+
+    @rx.var(cache=True)
+    def dashboard_sync_attention_short(self) -> str:
+        visible_campaigns = len(self.filtered_campaigns)
+        if visible_campaigns == 0:
+            return "No campaigns"
+        count = self.visible_campaign_sync_attention_count
+        if count == 0:
+            return "All clear"
+        if count == 1:
+            return "1 needs attention"
+        return f"{count} need attention"
 
     @rx.var(cache=True)
     def scoped_platform_model_breakdown(self) -> dict[str, dict[str, dict]]:
@@ -1443,6 +1531,22 @@ class NexusState(rx.State):
             self.visible_issue_count,
             participant_view_is_filtered=self.participant_view_is_filtered,
         )
+
+    @rx.var(cache=True)
+    def workspace_filter_summary(self) -> str:
+        return _build_workspace_filter_summary(
+            search_query=self.search_query,
+            filter_platform=self.filter_platform,
+            filter_status=self.filter_status,
+            filter_date=self.filter_date,
+            filter_has_issue=self.filter_has_issue,
+        )
+
+    @rx.var(cache=True)
+    def workspace_result_summary(self) -> str:
+        if self.visible_total_count == self.total_count:
+            return str(self.visible_total_count) + " in view"
+        return str(self.visible_total_count) + " of " + str(self.total_count) + " in view"
 
     @rx.var(cache=True)
     def participant_empty_title(self) -> str:
@@ -1540,7 +1644,14 @@ class NexusState(rx.State):
 
     @rx.var(cache=True)
     def current_campaign_sync_health(self) -> dict[str, object]:
-        return _build_campaign_sync_health(self.current_campaign)
+        return _add_compact_sync_copy(_build_campaign_sync_health(self.current_campaign))
+
+    @rx.var(cache=True)
+    def current_campaign_device_types_display(self) -> str:
+        device_types = self.current_campaign.get("device_types_display", "")
+        if device_types:
+            return str(device_types)
+        return ", ".join(self.current_campaign.get("device_types", []))
 
     @rx.var(cache=True)
     def campaign_deadline(self) -> str:
@@ -2598,6 +2709,15 @@ class NexusState(rx.State):
     def set_completed_collapsed(self, value: bool):
         self.completed_collapsed = value
 
+    def toggle_analytics_collapsed(self):
+        self.analytics_collapsed = not self.analytics_collapsed
+
+    def toggle_advanced_actions_collapsed(self):
+        self.advanced_actions_collapsed = not self.advanced_actions_collapsed
+
+    def toggle_export_details_collapsed(self):
+        self.export_details_collapsed = not self.export_details_collapsed
+
     # DATE NAVIGATION
 
     def go_to_today(self):
@@ -2735,6 +2855,9 @@ class NexusState(rx.State):
             self.selected_ids = []
             self.sort_field = "appointment_time"
             self.sort_dir = "asc"
+            self.analytics_collapsed = True
+            self.advanced_actions_collapsed = True
+            self.export_details_collapsed = True
             # Reset participant filters
             self.filter_platform = ""
             self.filter_status = ""
@@ -2752,8 +2875,8 @@ class NexusState(rx.State):
                     self.current_campaign = campaign
                     fresh = await get_participants_for_campaign(cid)
                     self._set_loaded_participants(fresh, preserve_selection=False)
-                    self.device_breakdown_open = True
-                    self.expanded_platform_panels = self._all_visible_platforms()
+                    self.device_breakdown_open = False
+                    self.expanded_platform_panels = []
                 else:
                     self.current_campaign = {}
                     self.participants = self._decorate_participants_for_ui([])

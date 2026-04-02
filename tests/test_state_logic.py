@@ -12,14 +12,17 @@ from datetime import datetime
 import nexus_track.state as state_module
 
 from nexus_track.state import (
+    _add_compact_sync_copy,
     _build_app_refresh_health,
     _build_campaign_calendar_payload,
     _build_campaign_sync_health,
+    _build_dashboard_metric_summary,
     _build_export_filename,
     _build_model_tag_usage_message,
     _build_platform_usage_message,
     _build_range_sync_result_message,
     _build_sync_result_message,
+    _build_workspace_filter_summary,
     _available_model_tags_for_form,
     _compute_campaign_progress_from_participants,
     _compute_per_device_progress_from_participants,
@@ -293,6 +296,22 @@ class TestCampaignSyncHealthHelpers:
         assert "Google token is missing" in str(sync["sync_primary_message"])
         assert "Last successful sync" in str(sync["sync_last_success_primary"])
 
+    def test_compact_sync_copy_marks_fresh_and_never_states(self):
+        fresh = _add_compact_sync_copy(
+            _build_campaign_sync_health(
+                {"last_sync_success_at": "2026-03-23T11:30:00"},
+                now=datetime(2026, 3, 23, 12, 0, 0),
+            ),
+        )
+        never = _add_compact_sync_copy(
+            _build_campaign_sync_health({}, now=datetime(2026, 3, 23, 12, 0, 0)),
+        )
+
+        assert fresh["sync_compact_label"] == "Fresh"
+        assert "11:30" in str(fresh["sync_compact_detail"])
+        assert never["sync_compact_label"] == "First sync"
+        assert "No successful sync yet" in str(never["sync_compact_detail"])
+
 
 class TestSyncErrorGuidance:
     def test_missing_token_error_maps_to_actionable_guidance(self):
@@ -336,7 +355,7 @@ class TestAppRefreshHealth:
         )
 
         assert health["state"] == "live"
-        assert health["label"] == "Live data"
+        assert health["label"] == "Live"
 
     def test_old_refresh_is_delayed(self):
         health = _build_app_refresh_health(
@@ -347,7 +366,7 @@ class TestAppRefreshHealth:
         )
 
         assert health["state"] == "delayed"
-        assert health["label"] == "Refresh delayed"
+        assert health["label"] == "Delayed"
 
     def test_newer_error_than_refresh_stays_red(self):
         health = _build_app_refresh_health(
@@ -358,7 +377,7 @@ class TestAppRefreshHealth:
         )
 
         assert health["state"] == "error"
-        assert health["label"] == "Refresh error"
+        assert health["label"] == "Refresh issue"
         assert "Mongo refresh failed" in health["title"]
 
     def test_recent_error_does_not_flip_back_to_live_without_new_success(self):
@@ -370,7 +389,36 @@ class TestAppRefreshHealth:
         )
 
         assert health["state"] == "error"
-        assert health["label"] == "Refresh error"
+        assert health["label"] == "Refresh issue"
+
+
+class TestLightweightUiHelpers:
+    def test_dashboard_metric_summary_is_compact(self):
+        assert _build_dashboard_metric_summary(5, 4, 1) == "5 total · 4 active · 1 completed"
+
+    def test_workspace_filter_summary_handles_none_and_multiple_filters(self):
+        assert _build_workspace_filter_summary(
+            search_query="",
+            filter_platform="",
+            filter_status="",
+            filter_date="",
+            filter_has_issue=False,
+        ) == "No filters"
+
+        assert _build_workspace_filter_summary(
+            search_query="alice",
+            filter_platform="iOS",
+            filter_status="Booked",
+            filter_date="",
+            filter_has_issue=True,
+        ) == "4 filters active"
+
+    def test_lightweight_sections_default_to_collapsed(self):
+        fields = state_module.NexusState.get_fields()
+
+        assert fields["analytics_collapsed"].default is True
+        assert fields["advanced_actions_collapsed"].default is True
+        assert fields["export_details_collapsed"].default is True
 
 
 class TestRefreshSchedulingHelpers:
@@ -692,7 +740,7 @@ class TestIssueHelpers:
             participant_scope_mode="all_dates",
         )
 
-        assert title == "No issues match the current view"
+        assert title == "No issues in this view"
         assert "bring flagged participants back into view" in description
 
     def test_participant_empty_state_handles_no_issues_yet(self):
@@ -705,7 +753,7 @@ class TestIssueHelpers:
         )
 
         assert title == "No flagged issues yet"
-        assert "Flag an issue" in description
+        assert "Flag a participant" in description
 
     def test_participant_empty_state_handles_selected_day_scope(self):
         title, description = _participant_empty_state(
@@ -716,8 +764,8 @@ class TestIssueHelpers:
             participant_scope_mode="selected_day",
         )
 
-        assert title == "No participants on the selected day"
-        assert "switch to All dates" in description or "Switch to All dates" in description
+        assert title == "No participants on this day"
+        assert "All dates" in description
 
 
 class TestScopeMessagingHelpers:

@@ -1,25 +1,17 @@
-"""Top navigation - frosted-glass bar with logo, nav, breadcrumb support."""
+"""Top navigation - compact bar with lightweight status and shortcuts."""
 
 import reflex as rx
 
 from .design_tokens import (
-    ACCENT,
     ACCENT_GRADIENT,
     ACCENT_SOFT,
     AMBER,
-    AMBER_SOFT,
-    BG,
     BORDER,
-    GREEN,
-    GREEN_SOFT,
     HEADING,
+    MAX_WIDTH,
     RADIUS_MD,
     RADIUS_SM,
-    RED,
-    RED_SOFT,
-    SHADOW_SM,
     SUBTEXT,
-    TRANSITION_FAST,
     ghost_icon_btn,
 )
 from ..state import NexusState
@@ -30,32 +22,30 @@ def navbar(breadcrumb: str = "") -> rx.Component:
     return rx.box(
         rx.hstack(
             # -- Logo
-            rx.link(
-                rx.hstack(
-                    # gradient icon badge
-                    rx.center(
-                        rx.icon("radio", size=16, color="white"),
-                        width="32px",
-                        height="32px",
-                        border_radius=RADIUS_SM,
-                        background=ACCENT_GRADIENT,
-                        box_shadow="0 2px 8px rgba(99,102,241,0.25)",
-                        flex_shrink="0",
-                    ),
-                    rx.text(
-                        "Nexus",
-                        size="4",
-                        weight="bold",
-                        color=HEADING,
-                        letter_spacing="-0.04em",
-                    ),
-                    rx.text(
-                        "Track",
-                        size="4",
-                        weight="medium",
-                        color=SUBTEXT,
-                        letter_spacing="-0.04em",
-                    ),
+                rx.link(
+                    rx.hstack(
+                        rx.center(
+                            rx.icon("radio", size=16, color="white"),
+                            width="30px",
+                            height="30px",
+                            border_radius=RADIUS_SM,
+                            background=ACCENT_GRADIENT,
+                            flex_shrink="0",
+                        ),
+                        rx.text(
+                            "Nexus",
+                            size="3",
+                            weight="bold",
+                            color=HEADING,
+                            letter_spacing="-0.04em",
+                        ),
+                        rx.text(
+                            "Track",
+                            size="3",
+                            weight="medium",
+                            color=SUBTEXT,
+                            letter_spacing="-0.04em",
+                        ),
                     spacing="2",
                     align="center",
                 ),
@@ -91,7 +81,7 @@ def navbar(breadcrumb: str = "") -> rx.Component:
                     NexusState.admin_mode,
                     rx.hstack(
                         rx.box(
-                            width="6px", height="6px",
+                            width="5px", height="5px",
                             border_radius="50%", bg=AMBER,
                         ),
                         rx.text(
@@ -104,107 +94,9 @@ def navbar(breadcrumb: str = "") -> rx.Component:
                         title="Click to logout",
                     ),
                 ),
-                # Refresh health
-                rx.hstack(
-                    rx.box(
-                        width="7px",
-                        height="7px",
-                        border_radius="50%",
-                        bg=rx.cond(
-                            NexusState.app_refresh_health["state"] == "live",
-                            GREEN,
-                            rx.cond(
-                                NexusState.app_refresh_health["state"] == "syncing",
-                                ACCENT,
-                                rx.cond(
-                                    NexusState.app_refresh_health["state"] == "refreshing",
-                                    ACCENT,
-                                    rx.cond(
-                                    NexusState.app_refresh_health["state"] == "delayed",
-                                    AMBER,
-                                    rx.cond(
-                                        NexusState.app_refresh_health["state"] == "error",
-                                        RED,
-                                        SUBTEXT,
-                                    ),
-                                    ),
-                                ),
-                            ),
-                        ),
-                        class_name=rx.cond(
-                            NexusState.app_refresh_health["state"] == "live",
-                            "pulse-dot",
-                            "",
-                        ),
-                    ),
-                    rx.vstack(
-                        rx.text(
-                            NexusState.app_refresh_health["label"],
-                            size="1",
-                            weight="medium",
-                            color=HEADING,
-                        ),
-                        rx.text(
-                            NexusState.app_refresh_health["detail"],
-                            size="1",
-                            color=SUBTEXT,
-                            white_space="nowrap",
-                        ),
-                        spacing="0",
-                        align="start",
-                    ),
-                    spacing="2",
-                    align="center",
-                    padding_x="10px",
-                    padding_y="6px",
-                    border_radius=RADIUS_MD,
-                    background=rx.cond(
-                        NexusState.app_refresh_health["state"] == "live",
-                        GREEN_SOFT,
-                        rx.cond(
-                            NexusState.app_refresh_health["state"] == "syncing",
-                            ACCENT_SOFT,
-                            rx.cond(
-                                NexusState.app_refresh_health["state"] == "refreshing",
-                                ACCENT_SOFT,
-                                rx.cond(
-                                NexusState.app_refresh_health["state"] == "delayed",
-                                AMBER_SOFT,
-                                rx.cond(
-                                    NexusState.app_refresh_health["state"] == "error",
-                                    RED_SOFT,
-                                    "transparent",
-                                ),
-                                ),
-                            ),
-                        ),
-                    ),
-                    border=rx.cond(
-                        NexusState.app_refresh_health["state"] == "live",
-                        "1px solid rgba(34,197,94,0.16)",
-                        rx.cond(
-                            NexusState.app_refresh_health["state"] == "syncing",
-                            "1px solid rgba(99,102,241,0.16)",
-                            rx.cond(
-                                NexusState.app_refresh_health["state"] == "refreshing",
-                                "1px solid rgba(99,102,241,0.16)",
-                                rx.cond(
-                                NexusState.app_refresh_health["state"] == "delayed",
-                                "1px solid rgba(245,158,11,0.16)",
-                                rx.cond(
-                                    NexusState.app_refresh_health["state"] == "error",
-                                    "1px solid rgba(239,68,68,0.16)",
-                                    BORDER,
-                                ),
-                                ),
-                            ),
-                        ),
-                    ),
-                    title=NexusState.app_refresh_health["title"],
-                ),
                 # New campaign shortcut
                 rx.link(
-                    ghost_icon_btn("plus"),
+                    ghost_icon_btn("plus", icon_size=16, button_size="2"),
                     href="/new",
                     title="New Campaign",
                     display="flex",
@@ -212,7 +104,7 @@ def navbar(breadcrumb: str = "") -> rx.Component:
                 ),
                 # Settings link
                 rx.link(
-                    ghost_icon_btn("settings"),
+                    ghost_icon_btn("settings", icon_size=16, button_size="2"),
                     href="/settings",
                     title="Settings",
                     display="flex",
@@ -221,37 +113,36 @@ def navbar(breadcrumb: str = "") -> rx.Component:
                 # Theme toggle
                 rx.icon_button(
                     rx.color_mode_cond(
-                        light=rx.icon("moon", size=14),
-                        dark=rx.icon("sun", size=14),
+                        light=rx.icon("moon", size=16),
+                        dark=rx.icon("sun", size=16),
                     ),
                     on_click=rx.toggle_color_mode,
                     variant="ghost",
-                    size="1",
+                    size="2",
                     cursor="pointer",
                     color=SUBTEXT,
                     _hover={
                         "background": ACCENT_SOFT,
                     },
-                    border_radius=RADIUS_SM,
+                    border_radius=RADIUS_MD,
                 ),
-                spacing="3", align="center",
+                spacing="2", align="center",
             ),
             justify="between",
             align="center",
             width="100%",
-            max_width="1200px",
+            max_width=MAX_WIDTH,
             margin_x="auto",
-            padding_x="24px",
+            padding_x="20px",
         ),
-        # -- Outer bar
-        height="60px",
+        height="54px",
         display="flex",
         align_items="center",
         background=rx.color_mode_cond(
-            light="rgba(255,255,255,0.72)",
-            dark="rgba(11,15,26,0.72)",
+            light="rgba(255,255,255,0.92)",
+            dark="rgba(11,15,26,0.94)",
         ),
-        backdrop_filter="blur(20px) saturate(180%)",
+        backdrop_filter="blur(6px) saturate(115%)",
         border_bottom=BORDER,
         width="100%",
         position="sticky",
